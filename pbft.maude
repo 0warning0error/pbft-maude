@@ -1,6 +1,8 @@
+*** 时间相关
 fmod NAT-TIME is pr NAT .
     sorts Time NzTime TimeInf . subsort NzTime < Time < TimeInf .
-    subsort Nat < Time . subsort NzNat < NzTime .
+    subsort Nat < Time . 
+    subsort NzNat < NzTime .
     op oo : -> TimeInf [ctor] . --- infinity value
     vars T T1 : Time . var TI : TimeInf . vars N N1 : Nat .
     --- extend operators to infinity:
@@ -12,6 +14,22 @@ fmod NAT-TIME is pr NAT .
     eq oo monus N = oo .
 endfm
 
+*** 重新定义configuration以用来重新定义格式
+mod CONFIGURATION is
+  sorts Attribute AttributeSet .
+  subsort Attribute < AttributeSet .
+  op none : -> AttributeSet  [ctor] .
+  op _,_ : AttributeSet AttributeSet -> AttributeSet [ctor assoc comm id: none] .
+
+  sorts Oid Cid Object Msg Portal Configuration .
+  subsort Object Msg Portal < Configuration .
+  op <_:_|_> : Oid Cid AttributeSet -> Object [ctor object] .
+  op none : -> Configuration [ctor] .
+  op __ : Configuration Configuration -> Configuration [ctor config assoc comm id: none  format(n n o)] .
+  op <> : -> Portal [ctor] .
+endm
+
+
 mod OO-TIMED-PRELUDE is pr NAT-TIME .
     including CONFIGURATION .
     pr RANDOM .
@@ -22,11 +40,11 @@ mod OO-TIMED-PRELUDE is pr NAT-TIME .
     var CLS : ClockedState . vars T T1 T2 : Time .
     vars CONF1 CONF2 : Configuration .
     eq (CLS in time T1) in time T2 = CLS in time (T1 + T2) .
-    op timeEffect : Configuration Time -> Configuration .
+    op timeEffect : Configuration Time -> Configuration .  ***将时间作用于Configuration
     eq timeEffect(none,T) = none .
     ceq timeEffect(CONF1 CONF2 , T ) = timeEffect(CONF1, T) timeEffect(CONF2, T)
         if CONF1 =/= none /\ CONF2 =/= none .
-
+    *** 求一个configuration能经过最长的时间
     op mte : Configuration -> TimeInf [frozen (1)] .
     eq mte(none) = oo .
     ceq mte(CONF1 CONF2) = min(mte(CONF1), mte(CONF2))
@@ -41,7 +59,7 @@ mod OO-TIMED-PRELUDE is pr NAT-TIME .
     eq max-time-interval = 100 .
     op _%_ : Nat NzNat -> Nat .
     var NZN : NzNat .
-    eq N % NZN = N rem NZN .
+    eq N % NZN = N rem NZN . *** 取余数用更清晰的表记法
     *** add nonexec to disable the rewriting rules 设置nonexec避免maude调用
     rl [tick-start] :
     {CONF} => if mte(CONF) == oo 
@@ -66,21 +84,21 @@ mod INTERFACE is
   pr OO-TIMED-PRELUDE .
   pr SET{Oid} .
   sort MsgCont .
-
+  *** State是消息的类型，也是当前节点的状态
   sort State .
-  ops request-start request pre-prepare prepare commit view-change reply : -> State [ctor].
+  ops request-start request pre-prepare prepare commit view-change reply : -> State [ctor format(b o)].
   sort MsgType .
   subsort State < MsgType .
-  op <`MType`:_|_>  : MsgType AttributeSet -> MsgCont [ctor] .
+  op <`MType`:_|_>  : MsgType AttributeSet -> MsgCont [ctor] . ***定义消息的内容
   op msg_from_to_ : MsgCont Oid Oid -> Msg [ctor format (yu ou u u u u o)] .
   
   
   sort Log .
-  op (_,_,_,_) : Msg Nat Nat Nat -> Log [ctor] .
+  op (_,_,_,_) : Msg Nat Nat Nat -> Log [ctor format(o o m o r o o o)] . *** 要保存的消息 ， 保存时的view，保存时候的序号，bakcup节点id 
   *** define the list of msg
   sort Msgs .
   subsort Msg < Msgs .
-  *** to avoid ambiguousity.( could not use List{Msg} ) 因为用不了List{Msg}
+  *** to avoid ambiguousity.( could not use List{Msg} ) 因为用不了List{Msg}，所以只能定义一个Msgs类型
   op empty : -> Msgs [ctor] .
   op _,_ : Msgs Msgs -> Msgs [ ctor assoc id: empty format(o r o o)] .
   op multicast_from_to_ : MsgCont Oid Set{Oid} -> Msgs .
@@ -111,7 +129,7 @@ endv
 *** 定义节点共有的部分
 mod NODE is
     pr INTERFACE .
-    pr LIST{Log} . *** use like the template in C++
+    pr LIST{Log} . *** use like the template in C++ 空的是nil 用空格连接
     subsort Nat < Oid .
     op Node : -> Cid [ctor] .
     sort NodeType .
@@ -130,7 +148,7 @@ mod NODE is
     op trust-num`:_ : Nat -> Attribute [ctor] . *** the trust number
     op logs`:_ : List{Log} -> Attribute [ctor] . *** the logs in backup
     op operation`:_ : Nat -> Attribute [ctor] . *** the operation client request . for convenience，we assume the operation is writing a number .
-    op current-num`:_ : Nat -> Attribute [ctor] . *** the current num the replica save .
+    op current-num`:_ : Nat -> Attribute [ctor format(o o g o)] . *** the current num the replica save .
     op _is`acceptable`in_ : Msg List{Log} -> Bool . ***( 
     function that can judge whether a node could accept a msg(same view v and seq n but different digest) 
     )
@@ -141,7 +159,7 @@ mod NODE is
     vars O O1 O2 O3 : Oid .
     vars N1 N2 N VIEW1 VIEW2 VIEW : Nat .
     vars AS AS1 : AttributeSet .
-    eq MSG is acceptable in nil = true . *** empty log surely indicates that the node has not accept any msg . 
+    eq MSG is acceptable in nil = true . *** empty log surely indicates that the node has not accept any msg . 某个节点的logs能否让节点接受此消息。
     eq msg < MType : MTYPE | original-msg : MSG , view : VIEW1 , seq : N2 , AS > from O2 to O3  is acceptable in ((LOGS) (msg < MType : MTYPE1 | original-msg : MSG1 , AS1 > from O to O1,VIEW,N,N1))  = 
         if MTYPE == MTYPE1 and MSG1 =/= MSG and VIEW1 == VIEW and N2 == N
         then false
@@ -166,7 +184,7 @@ mod CLIENT-EX is
     vars AS AS1 : AttributeSet .
     op wait-for-reply : Nat -> State [ctor] .
     op wait-timeout : -> State [ctor] .
-    op request-start : -> State [ctor] .
+    op request-start : -> State [ctor format(b o)] .
     op max-waittime : -> Nat .
     eq max-waittime = 300 .
     vars N RN N1 : Nat .
@@ -174,7 +192,8 @@ mod CLIENT-EX is
     < O : Node | view : N , state : request-start , r-num : RN , (snd-buffer : MSGS) , nodeType : CLIENT  , AS > =>
     < O : Node | view : N , state : wait-for-reply(max-waittime) , r-num : RN ,
                              trust-num : 0 ,
-                             snd-buffer : ( MSGS,msg < MType : request | operation : random(12) > from O to ( N % RN ) ) , nodeType : CLIENT , AS > .
+                             snd-buffer : ( MSGS,msg < MType : request | operation : random(12) > from O to ( N % RN ) ) , nodeType : CLIENT , AS > 
+                              [print "client " O " sends a request"].
     rl [rcv-reply]:
     < O : Node | view : N , 
                  state : wait-for-reply(max-waittime) , 
@@ -182,12 +201,14 @@ mod CLIENT-EX is
                 r-num : RN , 
                 rcv-buffer : ((msg < MType : request | AS1 > from O1 to O),MSGS) , 
                 nodeType : CLIENT  , AS > =>
-    < O : Node | view : N , state : wait-for-reply(max-waittime) , trust-num : s N1 , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > .
-
+    < O : Node | view : N , state : wait-for-reply(max-waittime) , trust-num : s N1 , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > 
+                [print "client " O " receives a reply"].
+    ***client接受完回复消息后的操作
     crl [return-request-start]:
     < O : Node | view : N , state : wait-for-reply(max-waittime) , trust-num : N1 , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > =>
     < O : Node | view : N , state : request-start , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > 
-    if (sd(RN,1) quo 3) * 2 <= N1 .
+    if (sd(RN,1) quo 3) * 2 <= N1 [nonexec].
+	
     var T : Time .
     eq timeEffect(< O : Node |  nodeType : CLIENT , state : wait-for-reply(N) , AS >, N1) = 
                                  if N <= N1 then < O : Node |  nodeType : CLIENT , state : wait-timeout , AS >
@@ -212,7 +233,7 @@ mod PRIMARY-EX is
     eq timeEffect(< O : Node |  nodeType : PRIMARY  , AS > ,T) = < O : Node |  nodeType : PRIMARY  , AS > .
     eq mte(< O : Node |  nodeType : PRIMARY  , AS >) = oo .
     vars N N1 N2 N3 VIEW VIEW1 VIEW2 : Nat .
-    *** rcv the request and multicast the pre-prepare msg 接收到请求消息，然后接受发送pre-prepare消息
+    *** rcv the request and multicast the pre-prepare msg 接收到请求消息，然后转换成pre=prepare发送pre-prepare消息
     rl [rcv-client-request]:
     < O : Node |  nodeType : PRIMARY ,
                  seq : N,
@@ -228,13 +249,13 @@ mod PRIMARY-EX is
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   state : prepare ,
-                  trust-num : 1 ,
+                  trust-num : 0 ,
                   original-msg : ( msg < MType : request | AS1 > from O1 to O ),
                   snd-buffer : (MSGS1,multicast < MType : pre-prepare | original-msg : (msg < MType : request | AS1 > from O1 to O) , 
                                                                         seq : N ,
                                                                         view : VIEW > from O to range(0,N1) \ O ),
-                  AS > .
-    *** defines how primary acts when having received prepare msg.
+                  AS > [print "primary " O " receives the request and multicast it to other backups"].
+    *** defines how primary acts when having received prepare msg. PRIMARY节点接受prepare消息
     rl [primary-rcv-prepare-msg] :
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
@@ -247,7 +268,8 @@ mod PRIMARY-EX is
                   original-msg : MSG ,
                   logs : LOGS ,
                   AS > =>
-        *** same v and same seq n and same digest ( simplify it to determination of the msg directly )
+    *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
+    *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
         if VIEW == VIEW1 and N2 == N and MSG == MSG1
         then
         < O : Node |  nodeType : PRIMARY ,
@@ -273,7 +295,7 @@ mod PRIMARY-EX is
                   original-msg : MSG ,
                   logs : LOGS ,
                   AS >
-        fi .
+        fi [print "primary " O " receives the pre-prepare msg from " O1 ] .
     *** nodes having received enough msgs will turn into commit state 接收到足够的消息，转换成commit状态
     crl [primary-into-commit]:
         < O : Node |  nodeType : PRIMARY ,
@@ -298,9 +320,9 @@ mod PRIMARY-EX is
                   original-msg : MSG ,
                   logs : (LOGS) ,
                   AS >
-        if (sd(N1,1) quo 3) * 2 <= N3 .
+        if (sd(N1,1) quo 3) * 2 <= N3 [print "primary " O " turns into commit " ].
         *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 接收到2f个消息。
-
+    *** 这里接受条件暂时变成接受2f个commit消息
         rl [primary-rcv-commit-msg]:
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
@@ -325,7 +347,7 @@ mod PRIMARY-EX is
                   state : prepare,
                   seq : N2 ,
                   original-msg : MSG ,
-                  logs : (LOGS (msg < MType : prepare | view : VIEW1 , seq : N , original-msg : MSG1 > from O1 to O , VIEW1 , N , O ) ) ,
+                  logs : (LOGS (msg < MType : commit | view : VIEW1 , seq : N , original-msg : MSG1 > from O1 to O , VIEW1 , N , O ) ) ,
                   AS >
         else
         < O : Node |  nodeType : PRIMARY ,
@@ -339,7 +361,7 @@ mod PRIMARY-EX is
                   original-msg : MSG ,
                   logs : LOGS ,
                   AS >
-        fi .
+        fi [print "primary " O " receives the commit msg" ].
     *** when the node receives enough msgs , operate and respond to the client
     crl [primary-respond-client-request]:
         < O : Node |  nodeType : PRIMARY ,
@@ -365,7 +387,7 @@ mod PRIMARY-EX is
                   seq : N2 ,
                   logs : (LOGS) ,
                   AS >
-        if (sd(N1,1) quo 3) * 2 <= N3 . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
+        if (sd(N1,1) quo 3) * 2 <= N3 [print "primary " O " respond to the client " O1 ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
     
 endm
 
@@ -393,8 +415,9 @@ mod BACKUP-EX is
                   snd-buffer : MSGS1 ,
                   logs : LOGS ,
                   AS > =>
-    *** if same v and the request has not been accepted by the node .
-    if VIEW == VIEW1 and msg < MType : pre-prepare | original-msg : MSG ,seq : N , view : VIEW1 ,AS1 > from O1 to O is acceptable in LOGS
+    *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
+    *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
+    if VIEW == VIEW1 and msg < MType : pre-prepare | original-msg : MSG ,seq : N , view : VIEW1 ,AS1 > from O1 to O is acceptable in LOGS  *** 该备份节点从未在视图v中接受过序号为n但是摘要d不同的消息m。
     then 
 	< O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -420,8 +443,9 @@ mod BACKUP-EX is
                   logs : LOGS ,
                   seq : N,
                   AS >
-    fi .
-    ***(For convenience，we receive an prepare msg by determining whether view v and seq n are same)
+    fi [print "backup " O " receives the pre-prepare msg " ].
+    ***(For convenience，we receive an prepare msg by determining whether view v and seq n are same) 
+    *** 是否是同样的view v 序号n满足水线限制（这里变成是否相等），消息签名是否一样（这里直接判断消息是否一样）
     rl [backup-rcv-prepare-msg]:
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -459,8 +483,9 @@ mod BACKUP-EX is
                   original-msg : MSG ,
                   logs : LOGS ,
                   AS >
-        fi .
+        fi [print "backup " O " receives the prepare msg " ] .
     *** nodes having received enough msgs will turn into commit state
+    *** 接收到足够的消息，转换成commit状态
     crl [backup-into-commit]:
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -484,8 +509,8 @@ mod BACKUP-EX is
                   original-msg : MSG ,
                   logs : (LOGS) ,
                   AS >
-        if (sd(N1,1) quo 3) * 2 <= N3 . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
-
+        if (sd(N1,1) quo 3) * 2 <= N3 [print "backup " O " turns into commit state " ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
+    *** 这里接受条件暂时变成接受2f个commit消息
     rl [backup-rcv-commit]:
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -507,10 +532,10 @@ mod BACKUP-EX is
                   trust-num : s N3 ,
                   rcv-buffer : MSGS ,
                   snd-buffer : MSGS1 ,
-                  state : prepare,
+                  state : commit,
                   seq : N2 ,
                   original-msg : MSG ,
-                  logs : (LOGS (msg < MType : prepare | view : VIEW1 , seq : N , original-msg : MSG1 > from O1 to O , VIEW1 , N , O ) ) ,
+                  logs : (LOGS (msg < MType : commit | view : VIEW1 , seq : N , original-msg : MSG1 > from O1 to O , VIEW1 , N , O ) ) ,
                   AS >
         else
         < O : Node |  nodeType : BACKUP ,
@@ -524,8 +549,9 @@ mod BACKUP-EX is
                   original-msg : MSG ,
                   logs : LOGS ,
                   AS >
-        fi .
+        fi [print "backup " O " receives the commit msg" ] .
     *** when the node receives enough msgs , operate and respond to the client
+    *** commit完成以后，发送reply给客户
     crl [backup-respond-client-request]:
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -549,7 +575,7 @@ mod BACKUP-EX is
                   logs : (LOGS) ,
                   current-num : VIEW2 ,
                   AS >
-        if (sd(N1,1) quo 3) * 2 <= N3 . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
+        if (sd(N1,1) quo 3) * 2 <= N3 [print "backup " O " response to the client " O2 ]. *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
 endm
 
 mod NETWORK is
@@ -564,10 +590,17 @@ mod NETWORK is
   vars O O1 O2 : Oid .
   var M : MsgCont .
   vars T T1 : Time .
+  var CLS : ClockedState .
+  *** 因为network里有CokckedState，也有可能是GlobalConfiguration,所以写了两个
   rl [rcv-msg] :
     [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > } in time T | MSGS1 ] 
         =>
     [ { C < O : Node |   (snd-buffer : MSGS) , AS > } in time T | (MSGS1,msg M from O to O2) ] . 
+
+  rl [rcv-msg] :
+    [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > }  | MSGS1 ] 
+        =>
+    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } | (MSGS1,msg M from O to O2) ] . 
 
   crl [discard-improper-msg]:
     [ { C < O : Node |   (snd-buffer : ((msg M from O1 to O2) , MSGS)) , AS > } in time T | MSGS1 ] 
@@ -578,14 +611,25 @@ mod NETWORK is
   rl [transfer-msg] :
     [ { C < O : Node |   rcv-buffer : MSGS , AS > } in time T | (msg M from O2 to O),MSGS1 ] 
         =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > } in time T | MSGS1 ] [print "trasferring message"] .
+    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > } in time T | MSGS1 ] .
+
+  rl [transfer-msg] :
+    [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
+        =>
+    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
+
+  rl [transfer-msg] :
+    [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
+        =>
+    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
 
   *** current disable the rules below
+  *** 网络可能会丢失消息，也有可能会错位发送消息，这里暂时先用nonexec屏蔽掉，之后可以用策略控制。
   rl [discard-msg] :
-    [ { C } in time T | MSG,MSGS1 ] =>  [ { C } in time T | MSGS1 ] [nonexec]. *** discard the msg
+    [ CLS | MSG,MSGS1 ] =>  [ CLS | MSGS1 ] [nonexec]. *** discard the msg
     
   rl [exchange-msg]:
-    [ { C } in time T | MSG,MSG1,MSGS1 ] => [ { C } in time T | MSG1,MSG,MSGS1 ] [nonexec].
+    [ CLS | MSG,MSG1,MSGS1 ] => [ CLS | MSG1,MSG,MSGS1 ] [nonexec].
     
 endm
 
@@ -622,3 +666,6 @@ mod INIT-PBFT is
                      < N : Clock | time : 0 > .
 	eq init = [ {  init-nodes(4) } | empty ] .
 endm
+
+set print attribute on .
+frew init .
