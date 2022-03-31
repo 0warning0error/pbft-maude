@@ -1,0 +1,576 @@
+***Configuration
+mod CONFIG is
+    pr NAT .
+
+    ***Configuration, a "multiset" of Msg and Node .
+    sorts Oid Node Msg Config .
+    subsorts Node Msg < Config .
+    subsort Nat < Oid .
+    op none : -> Config [ctor].
+    op __ : Config Config -> Config [ctor assoc comm id: none format(n n o)] .
+
+    ***AttributeSet, used as attributes of MsgCont and Node
+    sorts Attribute AttributeSet .
+    subsort Attribute < AttributeSet .
+    op none : -> AttributeSet [ctor] .
+    op _,_ : AttributeSet AttributeSet -> AttributeSet [ctor assoc comm id: none] .
+
+endm
+
+***Message
+mod MESSAGE is
+    pr CONFIG .
+    pr STRING .
+
+    sorts MsgType MsgCont .
+
+    ***Msg's type
+    ops request pre-prepare prepare commit reply : -> MsgType [ctor] .
+
+    ***Msg's content
+    op none : -> MsgCont [ctor] .
+    op <_|_> : MsgType AttributeSet -> MsgCont [ctor format(o g! o g o o)] .
+
+    ***request's attr
+    op command: _ : String -> Attribute [ctor] . ***just a string .
+    op timestamp: _ : Nat -> Attribute [ctor] . ***use a number++
+    op c: _ : Oid -> Attribute [ctor] .
+    *** pre-prepare prepare commit's message attr
+    op view: _ : Nat -> Attribute [ctor] .
+    op seq: _ : Nat -> Attribute [ctor] .
+    op d: _ : Nat -> Attribute [ctor] . ***just use request's timestamp as digest
+    op i: _ : Oid -> Attribute [ctor] .
+    *** reply message attr
+    op r: _ : String -> Attribute [ctor] .
+    
+    ***Wrap MsgCont to get Msg .
+    op msg_from_to_ : MsgCont Oid Oid -> Msg [ctor format (o y o r o b o)] .
+
+    ***some useful operations on MsgCont
+    op view : MsgCont -> Nat .
+    op seq : MsgCont -> Nat .
+    op digest : MsgCont -> Nat .
+    op type : MsgCont -> MsgType .
+
+    op ts : MsgCont -> Nat .
+    op res : MsgCont -> String .
+
+    var MT : MsgType .
+    vars vn sq dig : Nat .
+    var AS : AttributeSet .
+    var a : Nat .
+    var result : String .
+
+    eq view(< MT | view: vn, AS >) = vn .
+    eq seq(< MT | seq: sq, AS >) = sq .
+    eq digest(< MT | d: dig, AS >) = dig .
+    eq type(< MT | AS >) = MT .
+    eq ts(< MT | timestamp: a, AS >) = a .
+    eq res(< MT | r: result, AS >) = result .
+
+endm
+
+***Multicast
+mod MULTICAST is
+    pr CONFIG .
+    pr MESSAGE .
+
+    sort OidSet .
+    subsort Oid < OidSet .
+    op empty : -> OidSet [ctor].
+    op _._ : OidSet OidSet -> OidSet [ctor assoc comm id: empty] .
+    op multicast_from_to_ : MsgCont Oid OidSet -> Msg [ctor] .
+
+    vars O1 O2 : Oid .
+    var OS : OidSet .
+    var MC : MsgCont .
+    eq multicast MC from O1 to empty = none .
+    eq multicast MC from O1 to (O2 . OS) = (msg MC from O1 to O2) multicast MC from O1 to OS .
+
+endm
+
+***Log
+mod LEDGER is
+    pr CONFIG .
+    pr MESSAGE .
+    pr BOOL .
+
+    sorts Entry Ledger .
+    subsort Entry < Ledger .
+    subsort MsgCont < Entry .
+
+    op empty : -> Ledger [ctor] .
+    op _;_ : Ledger Ledger -> Ledger [ctor assoc comm id: empty] .
+
+    
+    ***some useful operations on log
+    op contains : Ledger Entry -> Bool .
+    ***used to count prepare and commit message in log
+    op countMsg : Ledger MsgType Nat Nat Nat  -> Nat .
+    ***used to count reply message in log
+    op countReply : Ledger Nat String -> Nat .
+
+    var E : Entry .
+    var L : Ledger .
+    var MT : MsgType .
+    var MC : MsgCont .
+    vars vn sq d : Nat .
+
+    eq contains((E ; L), E) = true .
+    eq contains(L, E) = false [owise] .
+    
+    eq countMsg(empty, MT, vn, sq, d) = 0 .
+    ceq countMsg( MC ; L, MT, vn, sq, d) = countMsg(L, MT, vn, sq, d) + 1
+    if type(MC) == MT /\ view(MC) == vn /\ seq(MC) == sq /\ digest(MC) == d .
+    eq countMsg( MC ; L, MT, vn, sq, d) = countMsg(L, MT, vn, sq, d) [owise] .
+
+    var a : Nat .
+    var b : String .
+
+    eq countReply(empty, a, b) = 0 .
+    ceq countReply( MC ; L, a, b) = countReply(L, a, b) + 1
+    if ts(MC) == a /\ res(MC) == b .
+    eq countReply( MC ; L, a, b) = countReply(L, a, b) [owise] .
+
+endm
+
+***Node
+mod NODE is 
+    pr CONFIG .
+    pr MESSAGE .
+    pr MULTICAST .
+    pr LEDGER .
+
+    sort NodeType .
+    *** Node
+    op <_:_|_> : Oid NodeType AttributeSet -> Node [ctor format(o o o r o o o o)] .
+    ***NodeType
+    ops client leader backup : -> NodeType [ctor] .
+
+    ***replica node's phase
+    sort Phase PhaseSet .
+    subsort Phase < PhaseSet .
+
+    ops pre-prepares prepares commits commit-locals complete : Nat -> Phase [ctor] .
+    op none : -> PhaseSet [ctor] .
+    op __ : PhaseSet PhaseSet -> PhaseSet [ctor assoc comm id: none] .
+
+    ***node's attributes
+    op rnum:_ : Nat -> Attribute [ctor] .
+    op phase:_ : PhaseSet -> Attribute [ctor] .
+    op log:_ : Ledger -> Attribute [ctor] .
+    op state:_ : String -> Attribute [ctor] .
+
+
+    ***used to generate multicast destinations
+    op range : Oid Oid -> OidSet .
+    op _--_ : OidSet OidSet -> OidSet .
+
+    vars O1 O2 : Oid .
+    var OS : OidSet .
+    eq range(O1, O2) = if O1 < O2 then (O1 . range(s O1, O2)) else empty fi .
+
+    eq (OS . O1) -- O1 = OS .
+endm
+
+***Client
+mod CLIENT is
+    ex NODE .
+    pr RANDOM .
+    pr COUNTER .
+
+    ***client's attributes
+    op curResult: <_,_> : Nat String -> Attribute [ctor] .
+    op curRequest: _ : MsgCont -> Attribute [ctor] .
+    op replyLog: _ : Ledger -> Attribute [ctor] .
+
+    ***for terminate,set max-number of request .
+    op maxN: _ : Nat -> Attribute [ctor] .
+
+    vars cli lea rep ri : Oid . ***Node id
+    vars vn new_vn : Nat . ***view number
+    var rn : Nat . ***replica number
+    var n : Nat .  ***max number of request can be sent
+    vars ts ts2 ts3 : Nat . ***timestamp
+    var com : String . ***command
+    vars curRes newRes : String . ***result
+    var L : Ledger . ***log
+    var AS AS2 : AttributeSet .
+
+    crl [send-request] :
+    < cli : client | 
+        maxN: n,
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: none, 
+        replyLog: L, AS > 
+    =>
+    < cli : client | 
+        maxN: sd(n, 1),
+        view: vn, 
+        rnum: rn, 
+        timestamp: (ts + 1),
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: char((random(counter) rem 26) + 97), timestamp: ts, c: cli >, 
+        replyLog: L, AS >
+    (msg < request | command: char((random(counter) rem 26) + 97), timestamp: ts, c: cli > from cli to (vn rem rn)) 
+    if n > 0
+    [print "client " cli " sends a request"] .
+    
+    crl [receive-reply] :
+    (msg < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes > from rep to cli)
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: L, AS > 
+    =>
+    < cli : client | 
+        view: new_vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: (L ; < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes >), AS > 
+    if not contains(L, < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes >)
+    [print "client " cli " receives a reply"] .
+
+    crl [confirm-reply] :
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: (L ; < reply | timestamp: ts3, r: newRes, AS2 >), AS > 
+    =>
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts3 , newRes >, 
+        curRequest: none, 
+        replyLog: none, AS >
+    if countReply(L, ts3, newRes) >= (sd(rn, 1) quo 3) /\ ts3 >= ts2 
+    [print "client " cli " confirm a reply."] .
+
+endm
+
+mod PRIMARY is
+    ex NODE .
+
+    vars vn vn2 sq sq2 : Nat .
+    var rn : Nat .
+    var ts : Nat .
+    vars cli lea bak rep ri : Oid .
+    vars phSet : PhaseSet .
+    var L : Ledger .
+    vars AS AS2 : AttributeSet .
+    var stat : String .
+    var com : String .
+
+    crl [receive-request] : 
+    (msg < request | command: com, timestamp: ts, c: cli > from cli to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: phSet,
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: (sq + 1),
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn , seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < pre-prepare | view: vn , seq: sq, d: ts > from lea to (range(0, rn) -- lea))
+    (multicast < request | command: com, timestamp: ts, c: cli > from lea to (range(0, rn) -- lea))
+    if not contains(L, < request | command: com, timestamp: ts, c: cli >) 
+    [print "primary " lea " receives a request."] .
+
+    crl [primary-receive-prepare] : 
+    (msg < prepare | view: vn2, seq: sq2, d: ts, i: ri > from rep to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < prepare | view: vn2, seq: sq2, d: ts, i: ri >), 
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < prepare | view: vn2, seq: sq2, d: ts, i: ri >) 
+    [print "primary " lea " receives a prepare from " ri "."] .
+
+    crl [primary-prepared] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq2, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq2, d: ts > ; < commit | view: vn, seq: sq2, d: ts, i: lea > ),
+        rnum: rn,
+        state: stat, AS > 
+    (multicast < commit | view: vn, seq: sq2, d: ts, i: lea > from lea to (range(0, rn) -- lea))
+    if countMsg(L, prepare, vn, sq2, ts) >= ((2 * sd(rn, 1)) quo 3) 
+    [print "primary " lea " prepared."] .
+
+    crl [primary-receive-commit] :
+    (msg < commit | view: vn2, seq: sq2, d: ts, i: ri > from rep to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader |
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < commit | view: vn2, seq: sq2, d: ts, i: ri >),
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < commit | view: vn2, seq: sq2, d: ts, i: ri >).
+
+    crl [primary-commit-local] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq2, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader |
+        view: vn,
+        seq: sq,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq2, d: ts >),
+        rnum: rn,
+        state: stat, AS >
+    if countMsg(L, commit, vn, sq2, ts) >= (((2 * sd(rn, 1)) quo 3) + 1) .
+
+    rl [primary-excutes-operation-and-reply] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet complete(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: (stat + com), AS >
+    (msg < reply | view: vn, timestamp: ts, c: cli, i: lea, r: (stat + com) > from lea to cli) .
+endm
+
+mod BACKUP is
+    ex NODE .
+
+    vars vn vn2 sq : Nat .
+    var rn : Nat .
+    var ts : Nat .
+    vars cli lea bak rep ri : Oid .
+    vars phSet : PhaseSet .
+    var L : Ledger .
+    var AS AS2 : AttributeSet .
+    var stat : String .
+    var d : Nat .
+    var com : String .
+
+
+    crl [receive-pre-prepare] : 
+    (msg < request | command: com, timestamp: ts, c: cli > from lea to bak)
+    (msg < pre-prepare | view: vn2 , seq: sq, d: ts > from lea to bak)
+    < bak : backup | 
+        view: vn,
+        phase: phSet,
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts > ; < prepare | view: vn, seq: sq, d: ts, i: bak >), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < prepare | view: vn, seq: sq, d: ts, i: bak > from bak to (range(0,rn) -- bak))
+    if vn == vn2 
+    [print "backup " bak " receives a pre-prepare from " lea "."] .
+
+    crl [backup-receive-prepare] : 
+    (msg < prepare | view: vn2, seq: sq, d: ts, i: ri > from rep to bak)
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < prepare | view: vn2, seq: sq, d: ts, i: ri >), 
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < prepare | view: vn2, seq: sq, d: ts, i: ri >) 
+    [print "backup " bak " receives a prepare from " ri "."] .
+
+    crl [backup-prepared] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts > ; < commit | view: vn, seq: sq, d: ts, i: bak > ), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < commit | view: vn, seq: sq, d: ts, i: bak > from bak to (range(0, rn) -- bak))
+    if countMsg(L, prepare, vn, sq, ts) >= ((2 * sd(rn, 1)) quo 3) .
+
+    crl [backup-receive-commit] :
+    (msg < commit | view: vn2, seq: sq, d: ts, i: ri > from rep to bak)
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup |
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < commit | view: vn2, seq: sq, d: ts, i: ri >),
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < commit | view: vn2, seq: sq, d: ts, i: ri >) .
+
+    crl [backup-commit-local] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup |
+        view: vn,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq, d: ts >),
+        rnum: rn,
+        state: stat, AS >
+    if countMsg(L, commit, vn, sq, ts) >= (((2 * sd(rn, 1)) quo 3) + 1) .
+
+    rl [backup-excutes-operation-and-reply] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet complete(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: (stat + com), AS >
+    (msg < reply | view: vn, timestamp: ts, c: cli, i: bak, r: (stat + com) > from bak to cli) .
+
+endm
+
+mod PBFT is
+    ex CLIENT + PRIMARY + BACKUP .
+
+    ***initialize client, parameter: client number, replica number
+    op init-client : Nat Nat -> Node .
+    ***initialize replica, parameter: replica number, replica number
+    op init-replica : Nat Nat -> Node .
+    ***initialize configuration, parameter: replica number, client number
+    op init-config : Nat Nat -> Config .
+    op init : -> Config .
+
+    vars rn cn : Nat .
+    vars i : Nat .
+
+    eq init-client(1, rn) = 
+    < rn : client | 
+        maxN: 5,
+        view: 0, 
+        rnum: rn, 
+        timestamp: 0,
+        curResult: < 0 , "" >, 
+        curRequest: none, 
+        replyLog: empty > .
+
+    ceq init-client(s i, rn) = 
+    init-client(i, rn)
+    < (rn + i) : client | 
+        maxN: 5,
+        view: 0, 
+        rnum: rn, 
+        timestamp: (100 * i),
+        curResult: < 0 , "" >, 
+        curRequest: none, 
+        replyLog: empty >
+    if i > 0 .
+
+    eq init-replica(1, rn) = 
+    < 0 : leader | 
+        view: 0,
+        seq: 0,
+        phase: none,
+        log: empty, 
+        rnum: rn,
+        state: "" > .
+
+    ceq init-replica(s i, rn) = 
+    init-replica(i, rn)
+    < i : backup | 
+        view: 0,
+        phase: none,
+        log: empty, 
+        rnum: rn,
+        state: "" >
+    if i > 0 .
+
+    eq init-config(rn, cn) = init-replica(rn, rn) init-client(cn, rn) .
+
+    eq init = init-config(4, 2) .
+endm
+
+set print attribute on .
+frew init .
