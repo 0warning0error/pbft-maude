@@ -129,6 +129,9 @@ endv
 view State from TRIV to INTERFACE is
   sort Elt to State .
 endv
+view MsgCont from TRIV to INTERFACE is
+  sort Elt to MsgCont .
+endv
 
 *** 定义节点共有的部分
 mod NODE is
@@ -136,6 +139,7 @@ mod NODE is
     pr LIST{Log} . *** use like the template in C++ 空的是nil 用空格连接
     pr LIST{Nat} .
     pr MAP{Nat,State} .
+    pr MAP{MsgCont,List{Log}} .
     subsort Nat < Oid .
     op Node : -> Cid [ctor] .
     sort NodeType .
@@ -152,7 +156,7 @@ mod NODE is
     op r-num`:_ : Nat -> Attribute [ctor] . *** the number of replicas 
     op states`:_ : Map{Nat,State} -> Attribute [ctor format(u o b o)] . *** the current state
     op trust-num`:_ : Nat -> Attribute [ctor] . *** the trust number
-    op logs`:_ : List{Log} -> Attribute [ctor] . *** the logs in backup
+    op logs`:_ : Map{MsgCont,List{Log}} -> Attribute [ctor] . *** the logs in backup
     op operation`:_ : Nat -> Attribute [ctor] . *** the operation client request . for convenience，we assume the operation is writing a number .
     op current-num`:_ : List{Nat} -> Attribute [ctor format(o o g o)] . *** the current num the replica save .
     op client`:_ : Oid -> Attribute [ctor] . *** client number
@@ -170,8 +174,8 @@ mod NODE is
     vars MCONT MCONT1 : MsgCont . 
     
     op _contains_ : List{Log} Log -> Bool .
-    eq (LOGS MCONT) contains MCONT1
-          = if MCONT == MCONT1 then true else LOGS contains MCONT1 fi .
+    eq (LOGS MCONT1) contains MCONT1 = true .
+    eq (LOGS MCONT) contains MCONT1 = LOGS contains MCONT1 [owise].
     eq nil contains MCONT = false .
 
     op operation : MsgCont -> Nat .
@@ -193,6 +197,8 @@ mod NODE is
     eq mte(< O : Node |  AS >) = oo .
 endm
 
+*** 修改了primary和backup的一部分rl，本意是想减少状态数，后来分析还是没有减少状态数。
+
 mod PRIMARY-EX is 
     ex NODE .
     
@@ -202,8 +208,10 @@ mod PRIMARY-EX is
     vars MSG1 MSG : Msg .
     vars MCONT MCONT1 MCONT2 MCONT3 : MsgCont .
     vars AS AS1 AS2 AS3  : AttributeSet .
-    vars LOGS LOGS1 : List{Log} .
+    vars LOGS LOGS1 : Map{MsgCont,List{Log}} .
+    vars LOGLIST LOGLIST1 LOGLIST2 : List{Log} .
     vars CURNUMS CURNUMS1 : List{Nat} .
+    vars MTYPE MTYPE1 : MsgType .
     vars SMAP SMAP1 : Map{Nat,State} .
     vars T T1 : Time .
     eq timeEffect(< O : Node |  nodeType : PRIMARY  , AS > ,T) = < O : Node |  nodeType : PRIMARY  , AS > .
@@ -224,35 +232,39 @@ mod PRIMARY-EX is
                   seq : s N, 
                   r-num : N1,
                   view : VIEW,
-                  logs : (LOGS < request | AS1 >) ,
+                  logs : (LOGS,< request | AS1 > |-> <  pre-prepare | original-msg : ( <  request | AS1 > ) ,
+                                                                        seq : N  ,
+                                                                        source : O ,
+                                                                        view : VIEW >) ,
                   rcv-buffer : MSGS ,
                   states : (SMAP,N |-> prepare) ,
                   snd-buffer : (MSGS1,multicast <  pre-prepare | original-msg : ( <  request | AS1 > ) ,
                                                                         seq : N  ,
                                                                         source : O ,
                                                                         view : VIEW > from O to range(0,N1) \ O ),
-                  AS > [print "primary " O " receives the request and multicast it to other backups"].
+                  AS > [print "primary " O " receives the request and multicast it to other backups"] .
     *** defines how primary acts when having received prepare msg. PRIMARY节点接受prepare消息
     rl [primary-rcv-prepare-msg] :
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
                   view : VIEW,
-                  rcv-buffer : ((msg <  prepare | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
+                  rcv-buffer : ((msg <  MTYPE | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
                   states : SMAP,
-                  logs : LOGS ,
+                  logs : (LOGS,MCONT1 |-> LOGLIST) ,
                   AS > =>
     *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
     *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
         if VIEW == VIEW1 
           and SMAP[N] == prepare
-          and not ( LOGS contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
+          and MTYPE == prepare
+          and not ( LOGLIST contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
         then
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : (LOGS < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 > ) ,
+                  logs : (LOGS , MCONT1 |-> (LOGLIST < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >) ) ,
                   AS >
         else
         < O : Node |  nodeType : PRIMARY ,
@@ -260,7 +272,7 @@ mod PRIMARY-EX is
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : LOGS ,
+                  logs : (LOGS,MCONT1 |-> LOGLIST) ,
                   AS >
         fi [print "primary " O " receives the prepare msg from " O1 ] .
     *** nodes having received enough msgs will turn into commit state 接收到足够的消息，转换成commit状态
@@ -271,7 +283,7 @@ mod PRIMARY-EX is
                   rcv-buffer : MSGS ,
                   snd-buffer : MSGS1 ,
                   states : (SMAP , N |-> prepare),
-                  logs : (LOGS (< prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> (LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1))) ,
                   AS > =>
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
@@ -279,29 +291,30 @@ mod PRIMARY-EX is
                   rcv-buffer : MSGS ,
                   snd-buffer : ( MSGS1 , multicast < commit | seq : N ,view : VIEW , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
                   states : (SMAP , N |-> commit),
-                  logs : (LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 ) ,
+                  logs : (LOGS,(MCONT |-> (LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1))) ,
                   AS >
         if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 , prepare,VIEW,N,MCONT) [print "primary " O " turns into commit " ].
+           countMsg(LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1 , prepare,VIEW,N,MCONT) [print "primary " O " turns into commit " ].
         *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 接收到2f个消息。
     *** 这里接受条件暂时变成接受2f个commit消息
     rl [primary-rcv-commit-msg]:
         < O : Node |  nodeType : PRIMARY ,
                   view : VIEW,
-                  rcv-buffer : ((msg <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
+                  rcv-buffer : ((msg <  MTYPE | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
                   states : SMAP ,
-                  logs : LOGS ,
+                  logs : (LOGS,(MCONT |-> LOGLIST)) ,
                   AS > =>
     *** if same v , same seq n and same msg digest ,accept it .
     if VIEW == VIEW1 
        and SMAP[N] == commit
-       and not (LOGS contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
+       and MTYPE == commit
+       and not (LOGLIST contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
         then
         < O : Node |  nodeType : PRIMARY ,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : (LOGS  < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >  ) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >)  ) ,
                   AS >
         else
         < O : Node |  nodeType : PRIMARY ,
@@ -320,7 +333,7 @@ mod PRIMARY-EX is
                   snd-buffer : MSGS1 ,
                   states : (SMAP,N |-> commit),
                   current-num : CURNUMS ,
-                  logs : (LOGS (< commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGLIST1)) ,
                   AS > =>
         < O : Node |  nodeType : PRIMARY ,
                   r-num : N1,
@@ -329,28 +342,31 @@ mod PRIMARY-EX is
                   snd-buffer : (MSGS1,msg < reply | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 >  > from O to O1 ) ,
                   states : (SMAP,N |-> complete),
                   current-num : (CURNUMS VIEW2) ,
-                  logs : (LOGS (< commit | seq : N , view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGLIST1)) ,
                   AS >
         if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGS1 , prepare,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
+           countMsg(LOGLIST < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGLIST1 , commit,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
         [print "primary " O " respond to the client " O1 ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
 endm
 
 mod BACKUP-EX is
     ex NODE .
-    vars C C1 C2 : Configuration .
+    
     vars O O1 O2 : Oid .
-    vars MSG MSG1 MSG2 : Msg .
+    vars C C1 C2 : Configuration .
     vars MSGS MSGS1 : Msgs .
+    vars MSG1 MSG : Msg .
+    vars MTYPE MTYPE1 : MsgType .
     vars MCONT MCONT1 MCONT2 MCONT3 : MsgCont .
-    vars AS AS1 AS2 : AttributeSet .
-    vars SMAP SMAP1 : Map{Nat,State} .
-    vars N N1 N2 N3 VIEW VIEW1 VIEW2 : Nat .
-    vars T T1 : Time .
+    vars AS AS1 AS2 AS3  : AttributeSet .
+    vars LOGS LOGS1 : Map{MsgCont,List{Log}} .
+    vars LOGLIST LOGLIST1 LOGLIST2 : List{Log} .
     vars CURNUMS CURNUMS1 : List{Nat} .
-    vars LOGS LOGS1 : List{Log} .
-    eq timeEffect( < O : Node |  nodeType : BACKUP   , AS > , T ) = < O : Node |  nodeType : BACKUP  , AS > .
-    eq mte(< O : Node |  nodeType : BACKUP  , AS >) = oo .
+    vars SMAP SMAP1 : Map{Nat,State} .
+    vars T T1 : Time .
+    eq timeEffect(< O : Node |  nodeType : PRIMARY  , AS > ,T) = < O : Node |  nodeType : PRIMARY  , AS > .
+    eq mte(< O : Node |  nodeType : PRIMARY  , AS >) = oo .
+    vars N N1 N2 N3 VIEW VIEW1 VIEW2 : Nat .
 
     *** ( receive pre-prepare msg and turn into prepare state )
     rl [rcv-pre-prepare]:
@@ -366,7 +382,7 @@ mod BACKUP-EX is
     *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
     if VIEW == VIEW1 
        and SMAP[N2] == undefined
-       and not ( LOGS contains <  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > ) *** 该备份节点从未在视图v中接受过序号为n但是摘要d不同的消息m。
+       and LOGS[MCONT] == undefined
     then 
     < O : Node |  nodeType : BACKUP ,
                   r-num : N1 ,
@@ -374,8 +390,7 @@ mod BACKUP-EX is
                   rcv-buffer : MSGS ,
                   snd-buffer : ( MSGS1 , multicast <  prepare | seq : N2 , view : VIEW1 , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
                   states : (SMAP,N2 |-> prepare),
-                  logs : (LOGS MCONT
-                          (<  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > )),
+                  logs : (LOGS,MCONT |->(<  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > )),
                   AS >
     else
     < O : Node |  nodeType : BACKUP ,
@@ -389,32 +404,36 @@ mod BACKUP-EX is
     fi [print "backup " O " receives the pre-prepare msg " ] .
     ***(For convenience，we receive an prepare msg by determining whether view v and seq n are same) 
     *** 是否是同样的view v 序号n满足水线限制（这里变成是否相等），消息签名是否一样（这里直接判断消息是否一样）
-    *** defines how primary acts when having received prepare msg. BACKUP节点接受prepare消息
+    *** defines how backup acts when having received prepare msg. BACKUP节点接受prepare消息
     rl [backup-rcv-prepare-msg] :
         < O : Node |  nodeType : BACKUP ,
+                  r-num : N1,
                   view : VIEW,
-                  rcv-buffer : ((msg <  prepare | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
+                  rcv-buffer : ((msg <  MTYPE | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
                   states : SMAP,
-                  logs : LOGS ,
+                  logs : (LOGS,MCONT1 |-> LOGLIST) ,
                   AS > =>
     *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
     *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
         if VIEW == VIEW1 
           and SMAP[N] == prepare
-          and not ( LOGS contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
+          and MTYPE == prepare  
+          and not ( LOGLIST contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
         then
         < O : Node |  nodeType : BACKUP ,
+                  r-num : N1,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : (LOGS < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 > ) ,
+                  logs : (LOGS , MCONT1 |-> (LOGLIST < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >) ) ,
                   AS >
         else
         < O : Node |  nodeType : BACKUP ,
+                  r-num : N1,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : LOGS ,
+                  logs : (LOGS,MCONT1 |-> LOGLIST) ,
                   AS >
         fi [print "backup " O " receives the prepare msg from " O1 ] .
     *** nodes having received enough msgs will turn into commit state 接收到足够的消息，转换成commit状态
@@ -425,7 +444,7 @@ mod BACKUP-EX is
                   rcv-buffer : MSGS ,
                   snd-buffer : MSGS1 ,
                   states : (SMAP , N |-> prepare),
-                  logs : (LOGS (< prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> (LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1))) ,
                   AS > =>
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -433,39 +452,37 @@ mod BACKUP-EX is
                   rcv-buffer : MSGS ,
                   snd-buffer : ( MSGS1 , multicast < commit | seq : N ,view : VIEW , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
                   states : (SMAP , N |-> commit),
-                  logs : (LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 ) ,
+                  logs : (LOGS,(MCONT |-> (LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1))) ,
                   AS >
         if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 , prepare,VIEW,N,MCONT) [print "primary " O " turns into commit " ].
+           countMsg(LOGLIST < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGLIST1 , prepare,VIEW,N,MCONT) [print "backup " O " turns into commit " ].
         *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 接收到2f个消息。
     *** 这里接受条件暂时变成接受2f个commit消息
     rl [backup-rcv-commit-msg]:
         < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
                   view : VIEW,
-                  rcv-buffer : ((msg <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
+                  rcv-buffer : ((msg <  MTYPE | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
                   states : SMAP ,
-                  logs : LOGS ,
+                  logs : (LOGS,(MCONT |-> LOGLIST)) ,
                   AS > =>
     *** if same v , same seq n and same msg digest ,accept it .
     if VIEW == VIEW1 
        and SMAP[N] == commit
-       and not (LOGS contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
+       and MTYPE == commit
+       and not (LOGLIST contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
         then
         < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : (LOGS  < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >  ) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >)  ) ,
                   AS >
         else
         < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
                   view : VIEW,
                   rcv-buffer : MSGS ,
                   states : SMAP,
-                  logs : LOGS ,
+                  logs : (LOGS,(MCONT |-> LOGLIST)) ,
                   AS >
         fi [print "backup " O " receives the commit msg" ].
     *** when the node receives enough msgs , operate and respond to the client
@@ -477,7 +494,7 @@ mod BACKUP-EX is
                   snd-buffer : MSGS1 ,
                   states : (SMAP,N |-> commit),
                   current-num : CURNUMS ,
-                  logs : (LOGS (< commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGLIST1)) ,
                   AS > =>
         < O : Node |  nodeType : BACKUP ,
                   r-num : N1,
@@ -486,10 +503,10 @@ mod BACKUP-EX is
                   snd-buffer : (MSGS1,msg < reply | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 >  > from O to O1 ) ,
                   states : (SMAP,N |-> complete),
                   current-num : (CURNUMS VIEW2) ,
-                  logs : (LOGS (< commit | seq : N , view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
+                  logs : (LOGS,(MCONT |-> LOGLIST < commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGLIST1)) ,
                   AS >
         if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGS1 , prepare,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
+           countMsg(LOGLIST < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGLIST1 , commit,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
         [print "backup " O " respond to the client " O1 ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
 endm
 
@@ -550,7 +567,7 @@ mod CLIENT-EX is
     eq mte(< O : Node |  nodeType : CLIENT , state : wait-timeout , AS >) = oo .
     eq mte(< O : Node |  nodeType : CLIENT , state : request-start , AS >) = oo .
 endm
-
+***为了减少状态量，直接将
 mod NETWORK is
   ex CLIENT-EX + PRIMARY-EX + BACKUP-EX .
   sort Network .
@@ -558,43 +575,45 @@ mod NETWORK is
   vars MSG MSG1 : Msg .
   vars OBJ OBJ1 : Object .
   vars C C1 : Configuration .
-  vars MSGS MSGS1 : Msgs .
+  vars MSGS MSGS1 MSGS2 : Msgs .
   vars AS AS1 : AttributeSet .
   vars O O1 O2 : Oid .
   var M : MsgCont .
   vars T T1 : Time .
   var CLS : ClockedState .
   *** 因为network里有CokckedState，也有可能是GlobalConfiguration,所以写了两个
+
+  *** 因为存储消息和发送消息会被视为两个，所以这里直接将snd-buffer中的消息直接传到目标的rcv-buffer中，缓解状态爆炸
+  rl [trans-msg]:
+    [ { C < O2 : Node | rcv-buffer : MSGS2 , AS1 > < O : Node |  snd-buffer : ( (msg M from O to O2) , MSGS ) , AS > }  | MSGS1 ]
+      =>
+    [ { C < O2 : Node | rcv-buffer : (MSGS2,(msg M from O to O2)) , AS1 > < O : Node | snd-buffer :  MSGS , AS > }  | MSGS1 ] .
+  
   rl [rcv-msg] :
     [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > } in time T | MSGS1 ] 
         =>
-    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } in time T | (MSGS1,msg M from O to O2) ] . 
+    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } in time T | (MSGS1,msg M from O to O2) ] [nonexec] . 
 
   rl [rcv-msg] :
     [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > }  | MSGS1 ] 
         =>
-    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } | (MSGS1,msg M from O to O2) ] . 
+    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } | (MSGS1,msg M from O to O2) ] [nonexec] . 
 
   crl [discard-improper-msg]:
     [ { C < O : Node |   (snd-buffer : ((msg M from O1 to O2) , MSGS)) , AS > } in time T | MSGS1 ] 
         =>
     [ { C < O : Node |   snd-buffer : MSGS , AS > } in time T | MSGS1 ] 
-    if O =/= O1 .
+    if O =/= O1 [nonexec].
 
   rl [transfer-msg] :
     [ { C < O : Node |   rcv-buffer : MSGS , AS > } in time T | (msg M from O2 to O),MSGS1 ] 
         =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > } in time T | MSGS1 ] .
+    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > } in time T | MSGS1 ] [nonexec] .
 
   rl [transfer-msg] :
     [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
         =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
-
-  rl [transfer-msg] :
-    [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
-        =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
+    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] [nonexec] .
 
   *** current disable the rules below
   *** 网络可能会丢失消息，也有可能会错位发送消息，这里暂时先用nonexec屏蔽掉，之后可以用策略控制。
@@ -609,10 +628,14 @@ endm
 
 mod INIT-PBFT is
     pr NETWORK .
-    vars N N1 N2 : Nat .
+    vars N N1 N2 VIEW VIEW1 VIEW2  : Nat .
     vars O O1 O2 : Oid . 
     vars AS AS1 AS2 : AttributeSet .
     vars CONF1 CONF2 : Configuration .
+    vars LOGS LOGS1 LOGS2 : Map{MsgCont,List{Log}} .
+    vars LOGLIST LOGLIST1 LOGLIST2 : List{Log} .
+    vars MTYPE MTYPE1 MTYPE2 : MsgType .
+    vars MCONT MCONT1 MCONT2 : MsgCont .
     op init : -> Network .
     op init-clock : Nat -> Object .
     op init-nodes : Nat Nat -> Configuration .
@@ -629,9 +652,8 @@ mod INIT-PBFT is
     *** init the primary , backups and a client .( N is the number of the backups , not the number of the Byzantine fault )
     eq init-nodes(N,N1) = init-node(N,N) init-clients(N,N1) init-clock(s N + N1 ) . 
     ceq init-node(s N , N1 ) =
-        < N : Node | rcv-buffer : empty , current-num : nil , states : empty , snd-buffer : empty , logs : nil , nodeType : BACKUP , view : 0 , r-num : N1 > init-node( N , N1 ) if N > 0 .
-    
-    eq init-node(1 , N) = < 0 : Node | rcv-buffer : empty , seq : random(N) , current-num : nil , logs : nil , snd-buffer : empty , nodeType : PRIMARY , view : 0 , states : empty , r-num : N > .
+        < N : Node | rcv-buffer : empty , current-num : nil , states : empty , snd-buffer : empty , logs : empty , nodeType : BACKUP , view : 0 , r-num : N1 > init-node( N , N1 ) if N > 0 .
+    eq init-node(1 , N) = < 0 : Node | rcv-buffer : empty , seq : random(N) , current-num : nil , logs : empty , snd-buffer : empty , nodeType : PRIMARY , view : 0 , states : empty , r-num : N > .
     op init-clients : Nat Nat -> Object .
     eq init-clients(N,s N1) = init-clients(s N , N1) init-client(N) .
     eq init-clients(N,0) = none .
@@ -640,7 +662,22 @@ mod INIT-PBFT is
                      < N : Node | times : 5 ,rcv-buffer : empty , snd-buffer : empty , nodeType : CLIENT , r-num : N , view : 0 , state : request-start > .
     eq init-clock(N) = 
                      < N : Clock | time : 0 > .
-	eq init = [ {  init-nodes(4,2) } | empty ] .
+    eq init = [ {  init-nodes(4,1) } | empty ] .
+    op _includes_ : List{Log} MsgCont -> Bool .
+    eq nil includes MCONT = false .
+    eq LOGLIST < MTYPE1 | view : VIEW1 , seq : N1 , original-msg : MCONT1 , AS1 > includes < MTYPE | view : VIEW , seq : N , original-msg : MCONT , AS1 > = 
+                      if MTYPE == MTYPE1 and N1 == N and MCONT1 == MCONT and VIEW1 == VIEW
+                      then true 
+                      else LOGLIST includes < MTYPE | view : VIEW , seq : N , original-msg : MCONT , AS1 > fi .
+
+    op prepared : MsgCont Nat Nat Object -> Bool .
+    eq prepared(< request | AS > , VIEW , N , < O : Node | logs : LOGS , r-num : N1 ,AS1 >) = 
+                LOGS[< request | AS >] =/= undefined  and
+                LOGS[< request | AS >] includes < pre-prepare | view : VIEW , seq : N ,original-msg : < request | AS > > and
+                countMsg( LOGS[< request | AS >], prepare , VIEW , N , < request | AS > ) >= 2 * (sd(N1,1) quo 3) .
+
+    op Seq : List{Log} -> Nat .
+    eq Seq(< MTYPE | seq : N , AS > LOGLIST) = N .
 endm
 
 smod PBFT-ACTION is 
@@ -660,5 +697,26 @@ endsm
 
 set print attribute off .
 *** srew init using one(main-strat) .
-frew init .
+*** frew init .
 set print attribute off .
+
+
+***(search init =>+ [ { C:Configuration 
+                    < O:Oid : Node | logs : (LOGS:Map{MsgCont,List{Log}},
+                                            < request | view : VIEW:Nat , AS1:AttributeSet > |-> LOGLIST:List{Log},
+                                            < request | view : VIEW:Nat , AS2:AttributeSet > |-> LOGLIST1:List{Log}),
+                                              AS:AttributeSet > } | MSGS:Msgs ]
+         such that ( prepared(< request | view : VIEW:Nat , AS1:AttributeSet >,VIEW:Nat,Seq(LOGLIST:List{Log}),< O:Oid : Node | logs : (LOGS:Map{MsgCont,List{Log}},
+                                            < request | view : VIEW:Nat , AS1:AttributeSet > |-> LOGLIST:List{Log},
+                                            < request | view : VIEW:Nat , AS2:AttributeSet > |-> LOGLIST1:List{Log}),
+                                              AS:AttributeSet >) 
+              implies 
+                     prepared(< request | view : VIEW:Nat , AS2:AttributeSet >,VIEW:Nat,Seq(LOGLIST:List{Log}),< O:Oid : Node | logs : (LOGS:Map{MsgCont,List{Log}},
+                                            < request | view : VIEW:Nat , AS1:AttributeSet > |-> LOGLIST:List{Log},
+                                            < request | view : VIEW:Nat , AS2:AttributeSet > |-> LOGLIST1:List{Log}),
+                                              AS:AttributeSet >)) =/= false .
+*** 搜索所有最后不可修改的最终状态
+search init =>! [{C:Configuration} | MSGS:Msgs] .
+show path labels 3023 .
+show path labels 7811681 .
+)
