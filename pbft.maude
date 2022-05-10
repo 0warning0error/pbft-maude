@@ -1,664 +1,576 @@
-*** 时间相关
-fmod NAT-TIME is pr NAT .
-    sorts Time NzTime TimeInf . subsort NzTime < Time < TimeInf .
-    subsort Nat < Time . 
-    subsort NzNat < NzTime .
-    op oo : -> TimeInf [ctor] . --- infinity value
-    vars T T1 : Time . var TI : TimeInf . vars N N1 : Nat .
-    --- extend operators to infinity:
-    op _<=_ : Time TimeInf -> Bool [ditto] .
-    op min : TimeInf TimeInf -> TimeInf [ditto] .
-    op _monus_ : TimeInf Time -> TimeInf .
-    eq T <= oo = true . eq min(oo, TI) = TI .
-    eq N monus N1 = if N1 <= N then sd(N, N1) else 0 fi .
-    eq oo monus N = oo .
-endfm
+***Configuration
+mod CONFIG is
+    pr NAT .
 
-*** 重新定义configuration以用来重新定义格式
-mod CONFIGURATION is
-  sorts Attribute AttributeSet .
-  subsort Attribute < AttributeSet .
-  op none : -> AttributeSet  [ctor] .
-  op _,_ : AttributeSet AttributeSet -> AttributeSet [ctor assoc comm id: none] .
-
-  sorts Oid Cid Object Msg Portal Configuration .
-  subsort Object Msg Portal < Configuration .
-  op <_:_|_> : Oid Cid AttributeSet -> Object [ctor object] .
-  op none : -> Configuration [ctor] .
-  op __ : Configuration Configuration -> Configuration [ctor config assoc comm id: none  format(n n o)] .
-  op <> : -> Portal [ctor] .
-endm
-
-
-mod OO-TIMED-PRELUDE is pr NAT-TIME .
-    including CONFIGURATION .
-    pr RANDOM .
-    sorts GlobalState ClockedState .
-    subsort GlobalState < ClockedState .
-    op `{_`} : Configuration -> GlobalState [ctor] .
-    op _in`time_ : GlobalState Time -> ClockedState [ctor format(d d d g o)] .
-    var CLS : ClockedState . vars T T1 T2 : Time .
-    vars CONF1 CONF2 : Configuration .
-    eq (CLS in time T1) in time T2 = CLS in time (T1 + T2) .
-    op timeEffect : Configuration Time -> Configuration .  ***将时间作用于Configuration
-    eq timeEffect(none,T) = none .
-    ceq timeEffect(CONF1 CONF2 , T ) = timeEffect(CONF1, T) timeEffect(CONF2, T)
-        if CONF1 =/= none /\ CONF2 =/= none .
-    *** 求一个configuration能经过最长的时间
-    op mte : Configuration -> TimeInf [frozen (1)] .
-    eq mte(none) = oo .
-    ceq mte(CONF1 CONF2) = min(mte(CONF1), mte(CONF2))
-                 if CONF1 =/= none /\ CONF2 =/= none .
-
-    var CONF : Configuration .
-    var N : Nat .
-    ***var T : Time .
-    op time-seed : -> Nat .
-    eq time-seed = 12 .
-    op max-time-interval : -> Nat .
-    eq max-time-interval = 100 .
-    op _%_ : Nat NzNat -> Nat .
-    var NZN : NzNat .
-    eq N % NZN = N rem NZN . *** 取余数用更清晰的表记法
-    *** add nonexec to disable the rewriting rules 设置nonexec避免maude调用
-    rl [tick-start] :
-    {CONF} => if mte(CONF) == oo 
-                              then {timeEffect(CONF, ( random(time-seed) % max-time-interval ) )} in time (random(time-seed) % max-time-interval)
-                              else {timeEffect(CONF, (random(time-seed) % mte(CONF)))} in time (random(time-seed) % mte(CONF))
-                              fi [nonexec] .
-    rl [tick] :
-    {CONF} in time N => if mte(CONF) == oo 
-                              then {timeEffect(CONF,random(N) % max-time-interval)} in time (random(N) % max-time-interval) + N
-                              else {timeEffect(CONF,random(N) % mte(CONF))} in time ( N + ( random(N) % mte(CONF) ))
-                              fi [nonexec] .
-
-endm
-
-***( 将 TRIV 映射到 CONFIGURATION 的 Oid ，便于使用 Set{Oid} )
-
-view Oid from TRIV to CONFIGURATION is
-  sort Elt to Oid .
-endv
-
-mod INTERFACE is
-  pr OO-TIMED-PRELUDE .
-  pr SET{Oid} .
-  sort MsgCont .
-  *** State是消息的类型，也是当前节点的状态
-  sort State .
-  ops pre-prepare prepare commit commit-local complete view-change reply : -> State [ctor format(b o)].
-  ops request-start request : -> State [ctor format(b o)] .
-  sort MsgType .
-  subsort State < MsgType .
-  op <_|_>  : MsgType AttributeSet -> MsgCont [ctor] . ***定义消息的内容
-  op msg_from_to_ : MsgCont Oid Oid -> Msg [ctor format (yu ou u u u u o)] .
-  
-  sort Log .
-  subsort MsgCont < Log .
-  *** define the list of msg
-  sort Msgs .
-  subsort Msg < Msgs .
-  *** to avoid ambiguousity.( could not use List{Msg} ) 因为用不了List{Msg}，所以只能定义一个Msgs类型
-  op empty : -> Msgs [ctor] .
-  op _,_ : Msgs Msgs -> Msgs [ ctor assoc id: empty format(o r o o)] .
-  op multicast_from_to_ : MsgCont Oid Set{Oid} -> Msgs . *** 群发消息
-  
-  
-  var M : MsgCont .
-  vars O O2 : Oid .
-  var OS : Set{Oid} .
-  eq multicast M from O to empty = empty .
-  eq multicast M from O to (O2 , OS) = (msg M from O to O2),multicast M from O to OS . 
-  
-  
-  op Clock : -> Cid [ctor] .
-  op time`:_ : Time -> Attribute [ctor] .
-  vars T T1 : Time .
-  var AS : AttributeSet .
-  
-  eq mte(< O : Clock | time : T >) = oo .
-  eq timeEffect(< O : Clock | time : T1 , AS > , T ) = < O : Clock | time : (T1 + T) , AS > .
-
-endm
-
-
-view Log from TRIV to INTERFACE is
-  sort Elt to Log .
-endv
-
-view State from TRIV to INTERFACE is
-  sort Elt to State .
-endv
-
-*** 定义节点共有的部分
-mod NODE is
-    pr INTERFACE .
-    pr LIST{Log} . *** use like the template in C++ 空的是nil 用空格连接
-    pr LIST{Nat} .
-    pr MAP{Nat,State} .
+    ***Configuration, a "multiset" of Msg and Node .
+    sorts Oid Node Msg Config .
+    subsorts Node Msg < Config .
     subsort Nat < Oid .
-    op Node : -> Cid [ctor] .
+    op none : -> Config [ctor].
+    op __ : Config Config -> Config [ctor assoc comm id: none format(n n o)] .
+
+    ***AttributeSet, used as attributes of MsgCont and Node
+    sorts Attribute AttributeSet .
+    subsort Attribute < AttributeSet .
+    op none : -> AttributeSet [ctor] .
+    op _,_ : AttributeSet AttributeSet -> AttributeSet [ctor assoc comm id: none] .
+
+endm
+
+***Message
+mod MESSAGE is
+    pr CONFIG .
+    pr STRING .
+
+    sorts MsgType MsgCont .
+
+    ***Msg's type
+    ops request pre-prepare prepare commit reply : -> MsgType [ctor] .
+
+    ***Msg's content
+    op none : -> MsgCont [ctor] .
+    op <_|_> : MsgType AttributeSet -> MsgCont [ctor format(o g! o g o o)] .
+
+    ***request's attr
+    op command: _ : String -> Attribute [ctor] . ***just a string .
+    op timestamp: _ : Nat -> Attribute [ctor] . ***use a number++
+    op c: _ : Oid -> Attribute [ctor] .
+    *** pre-prepare prepare commit's message attr
+    op view: _ : Nat -> Attribute [ctor] .
+    op seq: _ : Nat -> Attribute [ctor] .
+    op d: _ : Nat -> Attribute [ctor] . ***just use request's timestamp as digest
+    op i: _ : Oid -> Attribute [ctor] .
+    *** reply message attr
+    op r: _ : String -> Attribute [ctor] .
+    
+    ***Wrap MsgCont to get Msg .
+    op msg_from_to_ : MsgCont Oid Oid -> Msg [ctor format (o y o r o b o)] .
+
+    ***some useful operations on MsgCont
+    op view : MsgCont -> Nat .
+    op seq : MsgCont -> Nat .
+    op digest : MsgCont -> Nat .
+    op type : MsgCont -> MsgType .
+
+    op ts : MsgCont -> Nat .
+    op res : MsgCont -> String .
+
+    var MT : MsgType .
+    vars vn sq dig : Nat .
+    var AS : AttributeSet .
+    var a : Nat .
+    var result : String .
+
+    eq view(< MT | view: vn, AS >) = vn .
+    eq seq(< MT | seq: sq, AS >) = sq .
+    eq digest(< MT | d: dig, AS >) = dig .
+    eq type(< MT | AS >) = MT .
+    eq ts(< MT | timestamp: a, AS >) = a .
+    eq res(< MT | r: result, AS >) = result .
+
+endm
+
+***Multicast
+mod MULTICAST is
+    pr CONFIG .
+    pr MESSAGE .
+
+    sort OidSet .
+    subsort Oid < OidSet .
+    op empty : -> OidSet [ctor].
+    op _._ : OidSet OidSet -> OidSet [ctor assoc comm id: empty] .
+    op multicast_from_to_ : MsgCont Oid OidSet -> Msg [ctor] .
+
+    vars O1 O2 : Oid .
+    var OS : OidSet .
+    var MC : MsgCont .
+    eq multicast MC from O1 to empty = none .
+    eq multicast MC from O1 to (O2 . OS) = (msg MC from O1 to O2) multicast MC from O1 to OS .
+
+endm
+
+***Log
+mod LEDGER is
+    pr CONFIG .
+    pr MESSAGE .
+    pr BOOL .
+
+    sorts Entry Ledger .
+    subsort Entry < Ledger .
+    subsort MsgCont < Entry .
+
+    op empty : -> Ledger [ctor] .
+    op _;_ : Ledger Ledger -> Ledger [ctor assoc comm id: empty] .
+
+    
+    ***some useful operations on log
+    op contains : Ledger Entry -> Bool .
+    ***used to count prepare and commit message in log
+    op countMsg : Ledger MsgType Nat Nat Nat  -> Nat .
+    ***used to count reply message in log
+    op countReply : Ledger Nat String -> Nat .
+
+    var E : Entry .
+    var L : Ledger .
+    var MT : MsgType .
+    var MC : MsgCont .
+    vars vn sq d : Nat .
+
+    eq contains((E ; L), E) = true .
+    eq contains(L, E) = false [owise] .
+    
+    eq countMsg(empty, MT, vn, sq, d) = 0 .
+    ceq countMsg( MC ; L, MT, vn, sq, d) = countMsg(L, MT, vn, sq, d) + 1
+    if type(MC) == MT /\ view(MC) == vn /\ seq(MC) == sq /\ digest(MC) == d .
+    eq countMsg( MC ; L, MT, vn, sq, d) = countMsg(L, MT, vn, sq, d) [owise] .
+
+    var a : Nat .
+    var b : String .
+
+    eq countReply(empty, a, b) = 0 .
+    ceq countReply( MC ; L, a, b) = countReply(L, a, b) + 1
+    if ts(MC) == a /\ res(MC) == b .
+    eq countReply( MC ; L, a, b) = countReply(L, a, b) [owise] .
+
+endm
+
+***Node
+mod NODE is 
+    pr CONFIG .
+    pr MESSAGE .
+    pr MULTICAST .
+    pr LEDGER .
+
     sort NodeType .
-    *** define the role of the node 
-    ops BACKUP CLIENT PRIMARY : -> NodeType [ctor format (!b o)] .
-    op nodeType`:_ : NodeType -> Attribute [ctor] . 
-    
-    op view`:_ : Nat -> Attribute [ctor] . *** current view
-    op seq`:_ : Nat -> Attribute [ctor] . *** the msg sequence number
-    op original-msg`:_ : MsgCont -> Attribute [ctor] . *** the original msg
-    op rcv-buffer`:_ : Msgs -> Attribute [ctor] . *** receive buffer where sent msg is saved
-    op snd-buffer`:_ : Msgs -> Attribute [ctor] . *** send buffer where 
-    op timestamp`:_ : Nat -> Attribute [ctor] . *** the time when the msg is sent
-    op r-num`:_ : Nat -> Attribute [ctor] . *** the number of replicas 
-    op states`:_ : Map{Nat,State} -> Attribute [ctor format(u o b o)] . *** the current state
-    op trust-num`:_ : Nat -> Attribute [ctor] . *** the trust number
-    op logs`:_ : List{Log} -> Attribute [ctor] . *** the logs in backup
-    op operation`:_ : Nat -> Attribute [ctor] . *** the operation client request . for convenience，we assume the operation is writing a number .
-    op current-num`:_ : List{Nat} -> Attribute [ctor format(o o g o)] . *** the current num the replica save .
-    op client`:_ : Oid -> Attribute [ctor] . *** client number
-    op source`:_ : Oid -> Attribute [ctor] . *** the SOURCE OF msg
-	***( 
-    function that can judge whether a node could accept a msg(same view v and seq n but different digest) 
-    )
-    vars MSG MSG1 : Msg .
-    vars MSGS MSGS1 : Msgs .
-    vars LOGS LOGS1 : List{Log} .
-    vars MTYPE MTYPE1 : MsgType .
-    vars O O1 O2 O3 : Oid .
-    vars N1 N2 N VIEW1 VIEW2 VIEW : Nat .
-    vars AS AS1 : AttributeSet .
-    vars MCONT MCONT1 : MsgCont . 
-    
-    op _contains_ : List{Log} Log -> Bool .
-    eq (LOGS MCONT) contains MCONT1
-          = if MCONT == MCONT1 then true else LOGS contains MCONT1 fi .
-    eq nil contains MCONT = false .
+    *** Node
+    op <_:_|_> : Oid NodeType AttributeSet -> Node [ctor format(o o o r o o o o)] .
+    ***NodeType
+    ops client leader backup : -> NodeType [ctor] .
 
-    op operation : MsgCont -> Nat .
-    eq operation( < MTYPE | operation : N , AS > ) = N .
+    ***replica node's phase
+    sort Phase PhaseSet .
+    subsort Phase < PhaseSet .
 
-    op cli : MsgCont -> Oid .
-    eq cli( < MTYPE | (client : O) , AS > ) = O .
+    ops pre-prepares prepares commits commit-locals complete : Nat -> Phase [ctor] .
+    op none : -> PhaseSet [ctor] .
+    op __ : PhaseSet PhaseSet -> PhaseSet [ctor assoc comm id: none] .
 
-    op countMsg : List{Log} MsgType Nat Nat MsgCont -> Nat .
-    eq countMsg(LOGS < MTYPE1 | view : VIEW1 , original-msg : MCONT1 , AS > ,MTYPE,VIEW,N,MCONT) = 
-        if MTYPE == MTYPE1 and VIEW == VIEW1 and MCONT1 == MCONT  
-               then s countMsg(LOGS ,MTYPE,VIEW,N,MCONT)
-                else countMsg(LOGS ,MTYPE,VIEW,N,MCONT) fi .
-    eq countMsg(LOGS < MTYPE1 | AS >,MTYPE,VIEW,N,MCONT) = countMsg(LOGS,MTYPE,VIEW,N,MCONT) [owise] .
-    eq countMsg(nil,MTYPE,VIEW,N,MCONT) = 0 .
-    op range : Nat Nat -> Set{Oid} . *** to generate receiver set for multicast 为了multicast目的地址来写了range生成。
-    eq range(N,N1) = if N < N1 then N,range(s N,N1) else empty fi .
-    eq timeEffect(< O : Node |  AS >, N1) =  < O : Node |  AS > .
-    eq mte(< O : Node |  AS >) = oo .
+    ***node's attributes
+    op rnum:_ : Nat -> Attribute [ctor] .
+    op phase:_ : PhaseSet -> Attribute [ctor] .
+    op log:_ : Ledger -> Attribute [ctor] .
+    op state:_ : String -> Attribute [ctor] .
+
+
+    ***used to generate multicast destinations
+    op range : Oid Oid -> OidSet .
+    op _--_ : OidSet OidSet -> OidSet .
+
+    vars O1 O2 : Oid .
+    var OS : OidSet .
+    eq range(O1, O2) = if O1 < O2 then (O1 . range(s O1, O2)) else empty fi .
+
+    eq (OS . O1) -- O1 = OS .
 endm
 
-mod PRIMARY-EX is 
+***Client
+mod CLIENT is
     ex NODE .
+    pr RANDOM .
+    pr COUNTER .
+
+    ***client's attributes
+    op curResult: <_,_> : Nat String -> Attribute [ctor] .
+    op curRequest: _ : MsgCont -> Attribute [ctor] .
+    op replyLog: _ : Ledger -> Attribute [ctor] .
+
+    ***for terminate,set max-number of request .
+    op maxN: _ : Nat -> Attribute [ctor] .
+
+    vars cli lea rep ri : Oid . ***Node id
+    vars vn new_vn : Nat . ***view number
+    var rn : Nat . ***replica number
+    var n : Nat .  ***max number of request can be sent
+    vars ts ts2 ts3 : Nat . ***timestamp
+    var com : String . ***command
+    vars curRes newRes : String . ***result
+    var L : Ledger . ***log
+    var AS AS2 : AttributeSet .
+
+    crl [send-request] :
+    < cli : client | 
+        maxN: n,
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: none, 
+        replyLog: L, AS > 
+    =>
+    < cli : client | 
+        maxN: sd(n, 1),
+        view: vn, 
+        rnum: rn, 
+        timestamp: (ts + 1),
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: char((random(counter) rem 26) + 97), timestamp: ts, c: cli >, 
+        replyLog: L, AS >
+    (msg < request | command: char((random(counter) rem 26) + 97), timestamp: ts, c: cli > from cli to (vn rem rn)) 
+    if n > 0
+    [print "client " cli " sends a request"] .
     
-    vars O O1 O2 : Oid .
-    vars C C1 C2 : Configuration .
-    vars MSGS MSGS1 : Msgs .
-    vars MSG1 MSG : Msg .
-    vars MCONT MCONT1 MCONT2 MCONT3 : MsgCont .
-    vars AS AS1 AS2 AS3  : AttributeSet .
-    vars LOGS LOGS1 : List{Log} .
-    vars CURNUMS CURNUMS1 : List{Nat} .
-    vars SMAP SMAP1 : Map{Nat,State} .
-    vars T T1 : Time .
-    eq timeEffect(< O : Node |  nodeType : PRIMARY  , AS > ,T) = < O : Node |  nodeType : PRIMARY  , AS > .
-    eq mte(< O : Node |  nodeType : PRIMARY  , AS >) = oo .
-    vars N N1 N2 N3 VIEW VIEW1 VIEW2 : Nat .
-    *** rcv the request and multicast the pre-prepare msg 接收到请求消息，然后转换成pre=prepare发送pre-prepare消息
-    rl [rcv-client-request]:
-    < O : Node |  nodeType : PRIMARY ,
-                 seq : N,
-                 rcv-buffer : ((msg < request | AS1 > from O1 to O), MSGS) ,
-                 snd-buffer : MSGS1,
-                 view : VIEW ,
-                 states : SMAP ,
-                 logs : LOGS ,  
-                 r-num : N1,
-                 AS > =>
-    < O : Node |  nodeType : PRIMARY ,
-                  seq : s N, 
-                  r-num : N1,
-                  view : VIEW,
-                  logs : (LOGS < request | AS1 >) ,
-                  rcv-buffer : MSGS ,
-                  states : (SMAP,N |-> prepare) ,
-                  snd-buffer : (MSGS1,multicast <  pre-prepare | original-msg : ( <  request | AS1 > ) ,
-                                                                        seq : N  ,
-                                                                        source : O ,
-                                                                        view : VIEW > from O to range(0,N1) \ O ),
-                  AS > [print "primary " O " receives the request and multicast it to other backups"].
-    *** defines how primary acts when having received prepare msg. PRIMARY节点接受prepare消息
-    rl [primary-rcv-prepare-msg] :
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : ((msg <  prepare | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS > =>
-    *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
-    *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
-        if VIEW == VIEW1 
-          and SMAP[N] == prepare
-          and not ( LOGS contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
-        then
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : (LOGS < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 > ) ,
-                  AS >
-        else
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS >
-        fi [print "primary " O " receives the prepare msg from " O1 ] .
-    *** nodes having received enough msgs will turn into commit state 接收到足够的消息，转换成commit状态
-    crl [primary-into-commit]:
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : MSGS1 ,
-                  states : (SMAP , N |-> prepare),
-                  logs : (LOGS (< prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1)) ,
-                  AS > =>
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : ( MSGS1 , multicast < commit | seq : N ,view : VIEW , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
-                  states : (SMAP , N |-> commit),
-                  logs : (LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 ) ,
-                  AS >
-        if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 , prepare,VIEW,N,MCONT) [print "primary " O " turns into commit " ].
-        *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 接收到2f个消息。
-    *** 这里接受条件暂时变成接受2f个commit消息
-    rl [primary-rcv-commit-msg]:
-        < O : Node |  nodeType : PRIMARY ,
-                  view : VIEW,
-                  rcv-buffer : ((msg <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
-                  states : SMAP ,
-                  logs : LOGS ,
-                  AS > =>
-    *** if same v , same seq n and same msg digest ,accept it .
-    if VIEW == VIEW1 
-       and SMAP[N] == commit
-       and not (LOGS contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
-        then
-        < O : Node |  nodeType : PRIMARY ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : (LOGS  < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >  ) ,
-                  AS >
-        else
-        < O : Node |  nodeType : PRIMARY ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS >
-        fi [print "primary " O " receives the commit msg" ].
-    *** when the node receives enough msgs , operate and respond to the client
-    crl [primary-respond-client-request]:
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : MSGS1 ,
-                  states : (SMAP,N |-> commit),
-                  current-num : CURNUMS ,
-                  logs : (LOGS (< commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
-                  AS > =>
-        < O : Node |  nodeType : PRIMARY ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : (MSGS1,msg < reply | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 >  > from O to O1 ) ,
-                  states : (SMAP,N |-> complete),
-                  current-num : (CURNUMS VIEW2) ,
-                  logs : (LOGS (< commit | seq : N , view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
-                  AS >
-        if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGS1 , prepare,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
-        [print "primary " O " respond to the client " O1 ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
+    crl [receive-reply] :
+    (msg < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes > from rep to cli)
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: L, AS > 
+    =>
+    < cli : client | 
+        view: new_vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: (L ; < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes >), AS > 
+    if not contains(L, < reply | view: new_vn, timestamp: ts3, c: cli, i: ri, r: newRes >)
+    [print "client " cli " receives a reply"] .
+
+    crl [confirm-reply] :
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts2 , curRes >, 
+        curRequest: < request | command: com, timestamp: ts3, c: cli >, 
+        replyLog: (L ; < reply | timestamp: ts3, r: newRes, AS2 >), AS > 
+    =>
+    < cli : client | 
+        view: vn, 
+        rnum: rn, 
+        timestamp: ts,
+        curResult: < ts3 , newRes >, 
+        curRequest: none, 
+        replyLog: none, AS >
+    if countReply(L, ts3, newRes) >= (sd(rn, 1) quo 3) /\ ts3 >= ts2 
+    [print "client " cli " confirm a reply."] .
+
 endm
 
-mod BACKUP-EX is
+mod PRIMARY is
     ex NODE .
-    vars C C1 C2 : Configuration .
-    vars O O1 O2 : Oid .
-    vars MSG MSG1 MSG2 : Msg .
-    vars MSGS MSGS1 : Msgs .
-    vars MCONT MCONT1 MCONT2 MCONT3 : MsgCont .
-    vars AS AS1 AS2 : AttributeSet .
-    vars SMAP SMAP1 : Map{Nat,State} .
-    vars N N1 N2 N3 VIEW VIEW1 VIEW2 : Nat .
-    vars T T1 : Time .
-    vars CURNUMS CURNUMS1 : List{Nat} .
-    vars LOGS LOGS1 : List{Log} .
-    eq timeEffect( < O : Node |  nodeType : BACKUP   , AS > , T ) = < O : Node |  nodeType : BACKUP  , AS > .
-    eq mte(< O : Node |  nodeType : BACKUP  , AS >) = oo .
 
-    *** ( receive pre-prepare msg and turn into prepare state )
-    rl [rcv-pre-prepare]:
-    < O : Node |  nodeType : BACKUP ,
-                  r-num : N1 ,
-                  view : VIEW,
-                  rcv-buffer : ((msg <  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > from O1 to O), MSGS) ,
-                  states : SMAP ,
-                  snd-buffer : MSGS1 ,
-                  logs : LOGS ,
-                  AS > =>
-    *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
-    *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
-    if VIEW == VIEW1 
-       and SMAP[N2] == undefined
-       and not ( LOGS contains <  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > ) *** 该备份节点从未在视图v中接受过序号为n但是摘要d不同的消息m。
-    then 
-    < O : Node |  nodeType : BACKUP ,
-                  r-num : N1 ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : ( MSGS1 , multicast <  prepare | seq : N2 , view : VIEW1 , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
-                  states : (SMAP,N2 |-> prepare),
-                  logs : (LOGS MCONT
-                          (<  pre-prepare | seq : N2 , original-msg : MCONT , view : VIEW1 , source : O1 , AS1 > )),
-                  AS >
-    else
-    < O : Node |  nodeType : BACKUP ,
-                  r-num : N1 ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP ,
-                  snd-buffer : MSGS1 ,
-                  logs : LOGS ,
-                  AS >
-    fi [print "backup " O " receives the pre-prepare msg " ] .
-    ***(For convenience，we receive an prepare msg by determining whether view v and seq n are same) 
-    *** 是否是同样的view v 序号n满足水线限制（这里变成是否相等），消息签名是否一样（这里直接判断消息是否一样）
-    *** defines how primary acts when having received prepare msg. BACKUP节点接受prepare消息
-    rl [backup-rcv-prepare-msg] :
-        < O : Node |  nodeType : BACKUP ,
-                  view : VIEW,
-                  rcv-buffer : ((msg <  prepare | view : VIEW1 , seq : N , original-msg : MCONT1 , source : N3 , AS1 > from O1 to O), MSGS ) ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS > =>
-    *** 预准备消息的序号n必须在水线（watermark）上下限h和H之间。（暂时忽略）
-    *** if same v and the request has not been accepted by the node .请求和预准备消息的签名正确,摘要也相同(这里直接变成判断消息是否相等)
-        if VIEW == VIEW1 
-          and SMAP[N] == prepare
-          and not ( LOGS contains <  prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 >  )
-        then
-        < O : Node |  nodeType : BACKUP ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : (LOGS < prepare | seq : N , view : VIEW1 , original-msg : MCONT1 , source : N3 , AS1 > ) ,
-                  AS >
-        else
-        < O : Node |  nodeType : BACKUP ,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS >
-        fi [print "backup " O " receives the prepare msg from " O1 ] .
-    *** nodes having received enough msgs will turn into commit state 接收到足够的消息，转换成commit状态
-    crl [backup-into-commit]:
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : MSGS1 ,
-                  states : (SMAP , N |-> prepare),
-                  logs : (LOGS (< prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1)) ,
-                  AS > =>
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : ( MSGS1 , multicast < commit | seq : N ,view : VIEW , original-msg : MCONT , source : O > from O to range(0,N1) \ O ) ,
-                  states : (SMAP , N |-> commit),
-                  logs : (LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 ) ,
-                  AS >
-        if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < prepare | seq : N , view : VIEW , original-msg : MCONT , AS1 > LOGS1 , prepare,VIEW,N,MCONT) [print "primary " O " turns into commit " ].
-        *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 接收到2f个消息。
-    *** 这里接受条件暂时变成接受2f个commit消息
-    rl [backup-rcv-commit-msg]:
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : ((msg <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > from O1 to O), MSGS ) ,
-                  states : SMAP ,
-                  logs : LOGS ,
-                  AS > =>
-    *** if same v , same seq n and same msg digest ,accept it .
-    if VIEW == VIEW1 
-       and SMAP[N] == commit
-       and not (LOGS contains <  commit | seq : N , view : VIEW1 , original-msg : MCONT , source : O1 , AS1 > )
-        then
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : (LOGS  < commit | seq : N , view : VIEW1 , seq : N , original-msg : MCONT , source : O1 , AS1 >  ) ,
-                  AS >
-        else
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  states : SMAP,
-                  logs : LOGS ,
-                  AS >
-        fi [print "backup " O " receives the commit msg" ].
-    *** when the node receives enough msgs , operate and respond to the client
-    crl [backup-respond-client-request]:
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : MSGS1 ,
-                  states : (SMAP,N |-> commit),
-                  current-num : CURNUMS ,
-                  logs : (LOGS (< commit | seq : N ,view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
-                  AS > =>
-        < O : Node |  nodeType : BACKUP ,
-                  r-num : N1,
-                  view : VIEW,
-                  rcv-buffer : MSGS ,
-                  snd-buffer : (MSGS1,msg < reply | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 >  > from O to O1 ) ,
-                  states : (SMAP,N |-> complete),
-                  current-num : (CURNUMS VIEW2) ,
-                  logs : (LOGS (< commit | seq : N , view : VIEW1 , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > , AS1 > LOGS1)) ,
-                  AS >
-        if (sd(N1,1) quo 3) * 2 <= 
-           countMsg(LOGS < commit | seq : N , view : VIEW , original-msg : < request | client : O1 , operation : VIEW2 , AS2 > ,AS1 > LOGS1 , prepare,VIEW,N,< request | client : O1 , operation : VIEW2 , AS2 >) 
-        [print "backup " O " respond to the client " O1 ] . *** f = (N1 - 1) / 3 receiving more than 2f msgs will turn backup to commit 
+    vars vn vn2 sq sq2 : Nat .
+    var rn : Nat .
+    var ts : Nat .
+    vars cli lea bak rep ri : Oid .
+    vars phSet : PhaseSet .
+    var L : Ledger .
+    vars AS AS2 : AttributeSet .
+    var stat : String .
+    var com : String .
+
+    crl [receive-request] : 
+    (msg < request | command: com, timestamp: ts, c: cli > from cli to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: phSet,
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: (sq + 1),
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn , seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < pre-prepare | view: vn , seq: sq, d: ts > from lea to (range(0, rn) -- lea))
+    (multicast < request | command: com, timestamp: ts, c: cli > from lea to (range(0, rn) -- lea))
+    if not contains(L, < request | command: com, timestamp: ts, c: cli >) 
+    [print "primary " lea " receives a request."] .
+
+    crl [primary-receive-prepare] : 
+    (msg < prepare | view: vn2, seq: sq2, d: ts, i: ri > from rep to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < prepare | view: vn2, seq: sq2, d: ts, i: ri >), 
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < prepare | view: vn2, seq: sq2, d: ts, i: ri >) 
+    [print "primary " lea " receives a prepare from " ri "."] .
+
+    crl [primary-prepared] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet pre-prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq2, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq2, d: ts > ; < commit | view: vn, seq: sq2, d: ts, i: lea > ),
+        rnum: rn,
+        state: stat, AS > 
+    (multicast < commit | view: vn, seq: sq2, d: ts, i: lea > from lea to (range(0, rn) -- lea))
+    if countMsg(L, prepare, vn, sq2, ts) >= ((2 * sd(rn, 1)) quo 3) 
+    [print "primary " lea " prepared."] .
+
+    crl [primary-receive-commit] :
+    (msg < commit | view: vn2, seq: sq2, d: ts, i: ri > from rep to lea)
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader |
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < commit | view: vn2, seq: sq2, d: ts, i: ri >),
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < commit | view: vn2, seq: sq2, d: ts, i: ri >).
+
+    crl [primary-commit-local] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commits(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq2, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader |
+        view: vn,
+        seq: sq,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq2, d: ts >),
+        rnum: rn,
+        state: stat, AS >
+    if countMsg(L, commit, vn, sq2, ts) >= (((2 * sd(rn, 1)) quo 3) + 1) .
+
+    rl [primary-excutes-operation-and-reply] :
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < lea : leader | 
+        view: vn,
+        seq: sq,
+        phase: (phSet complete(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: (stat + com), AS >
+    (msg < reply | view: vn, timestamp: ts, c: cli, i: lea, r: (stat + com) > from lea to cli) .
 endm
 
-mod CLIENT-EX is
+mod BACKUP is
     ex NODE .
-    vars O O1 O2 : Oid .
-    vars C C1 C2 : Configuration .
-    vars MSGS MSGS1 : Msgs .
-    vars AS AS1 : AttributeSet .
-    vars MCONT MCONT1 MCONT2 : MsgCont .
-    op wait-for-reply : Nat -> State [ctor] .
-    op wait-timeout : -> State [ctor] .
-    op request-start : -> State [ctor format(b o)] .
-    op max-waittime : -> Nat .
-    eq max-waittime = 300 .
-    op current-request`:_ : MsgCont -> Attribute [ctor] .
-    op state`:_ : State -> Attribute [ctor] .
-    op times`:_ : Nat -> Attribute [ctor] .
-    vars N RN N1 N2 N3 : Nat .
-    rl [snd-request]:
-    < O : Node | view : N , times : s N1, state : request-start , r-num : RN , (snd-buffer : MSGS) , nodeType : CLIENT  , AS > =>
-    < O : Node | view : N , times : N1 , state : wait-for-reply(max-waittime) , r-num : RN ,
-                             trust-num : 0 ,
-                             current-request : <  request | operation : random(O + N1) , client : O > ,
-                             snd-buffer : ( MSGS,msg <  request | operation : random(O + N1) , client : O > from O to ( N % RN ) ) , nodeType : CLIENT , AS > 
-                              [print "client " O " sends a request"] .
-    rl [rcv-reply]:
-    < O : Node | view : N , 
-                 state : wait-for-reply(N2) , 
-                trust-num : N1 , 
-                r-num : RN , 
-                current-request : MCONT ,
-                rcv-buffer : ((msg < reply | original-msg : MCONT1 , AS1 > from O1 to O),MSGS) , 
-                nodeType : CLIENT  , AS > =>
-    if MCONT == MCONT1 then
-    < O : Node | view : N , current-request : MCONT , state : wait-for-reply(N2) , trust-num : s N1 , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > 
-    else
-    < O : Node | view : N , 
-                 state : wait-for-reply(N2) , 
-                trust-num : N1 , 
-                r-num : RN , 
-                current-request : MCONT ,
-                rcv-buffer : MSGS , 
-                nodeType : CLIENT  , AS >
-    fi
-                [print "client " O " receives a reply"] .
-    ***client接受完回复消息后的操作
-    crl [return-request-start]:
-    < O : Node | view : N , state : wait-for-reply(N2) , current-request : MCONT ,trust-num : N1 , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > =>
-    < O : Node | view : N , state : request-start , r-num : RN , rcv-buffer : MSGS , nodeType : CLIENT  , AS > 
-    if (sd(RN,1) quo 3) * 2 <= N1 .
-    var T : Time .
-    eq timeEffect(< O : Node |  nodeType : CLIENT , state : wait-for-reply(N) , AS >, N1) = 
-                                 if N <= N1 then < O : Node |  nodeType : CLIENT , state : wait-timeout , AS >
-                                        else < O : Node |  nodeType : CLIENT , state : wait-for-reply(sd(N1,N)) , AS > fi .
-    --- eq timeEffect(< O : Node |  nodeType : CLIENT  , AS >,T) = < O : Node |  nodeType : CLIENT  , AS > .
-    eq mte(< O : Node |  nodeType : CLIENT , state : wait-for-reply(N) , AS >) = N .
-    eq mte(< O : Node |  nodeType : CLIENT , state : wait-timeout , AS >) = oo .
-    eq mte(< O : Node |  nodeType : CLIENT , state : request-start , AS >) = oo .
+
+    vars vn vn2 sq : Nat .
+    var rn : Nat .
+    var ts : Nat .
+    vars cli lea bak rep ri : Oid .
+    vars phSet : PhaseSet .
+    var L : Ledger .
+    var AS AS2 : AttributeSet .
+    var stat : String .
+    var d : Nat .
+    var com : String .
+
+
+    crl [receive-pre-prepare] : 
+    (msg < request | command: com, timestamp: ts, c: cli > from lea to bak)
+    (msg < pre-prepare | view: vn2 , seq: sq, d: ts > from lea to bak)
+    < bak : backup | 
+        view: vn,
+        phase: phSet,
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts > ; < prepare | view: vn, seq: sq, d: ts, i: bak >), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < prepare | view: vn, seq: sq, d: ts, i: bak > from bak to (range(0,rn) -- bak))
+    if vn == vn2 
+    [print "backup " bak " receives a pre-prepare from " lea "."] .
+
+    crl [backup-receive-prepare] : 
+    (msg < prepare | view: vn2, seq: sq, d: ts, i: ri > from rep to bak)
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < prepare | view: vn2, seq: sq, d: ts, i: ri >), 
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < prepare | view: vn2, seq: sq, d: ts, i: ri >) 
+    [print "backup " bak " receives a prepare from " ri "."] .
+
+    crl [backup-prepared] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet prepares(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli > ; < pre-prepare | view: vn, seq: sq, d: ts > ; < commit | view: vn, seq: sq, d: ts, i: bak > ), 
+        rnum: rn,
+        state: stat, AS >
+    (multicast < commit | view: vn, seq: sq, d: ts, i: bak > from bak to (range(0, rn) -- bak))
+    if countMsg(L, prepare, vn, sq, ts) >= ((2 * sd(rn, 1)) quo 3) .
+
+    crl [backup-receive-commit] :
+    (msg < commit | view: vn2, seq: sq, d: ts, i: ri > from rep to bak)
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: L, 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup |
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < commit | view: vn2, seq: sq, d: ts, i: ri >),
+        rnum: rn,
+        state: stat, AS >
+    if vn == vn2 /\ not contains(L, < commit | view: vn2, seq: sq, d: ts, i: ri >) .
+
+    crl [backup-commit-local] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commits(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq, d: ts >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup |
+        view: vn,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < pre-prepare | view: vn , seq: sq, d: ts >),
+        rnum: rn,
+        state: stat, AS >
+    if countMsg(L, commit, vn, sq, ts) >= (((2 * sd(rn, 1)) quo 3) + 1) .
+
+    rl [backup-excutes-operation-and-reply] :
+    < bak : backup | 
+        view: vn,
+        phase: (phSet commit-locals(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: stat, AS >
+    =>
+    < bak : backup | 
+        view: vn,
+        phase: (phSet complete(ts)),
+        log: (L ; < request | command: com, timestamp: ts, c: cli >), 
+        rnum: rn,
+        state: (stat + com), AS >
+    (msg < reply | view: vn, timestamp: ts, c: cli, i: bak, r: (stat + com) > from bak to cli) .
+
 endm
 
-mod NETWORK is
-  ex CLIENT-EX + PRIMARY-EX + BACKUP-EX .
-  sort Network .
-  op [_|_] : ClockedState Msgs -> Network [ ctor format (n n n n n n)] . *** the nodes and the msgs list waiting to be sent
-  vars MSG MSG1 : Msg .
-  vars OBJ OBJ1 : Object .
-  vars C C1 : Configuration .
-  vars MSGS MSGS1 : Msgs .
-  vars AS AS1 : AttributeSet .
-  vars O O1 O2 : Oid .
-  var M : MsgCont .
-  vars T T1 : Time .
-  var CLS : ClockedState .
-  *** 因为network里有CokckedState，也有可能是GlobalConfiguration,所以写了两个
-  rl [rcv-msg] :
-    [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > } in time T | MSGS1 ] 
-        =>
-    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } in time T | (MSGS1,msg M from O to O2) ] . 
+mod PBFT is
+    ex CLIENT + PRIMARY + BACKUP .
 
-  rl [rcv-msg] :
-    [ { C < O : Node |   (snd-buffer : ( (msg M from O to O2) , MSGS )) , AS > }  | MSGS1 ] 
-        =>
-    [ { C < O : Node |   (snd-buffer : MSGS) , AS > } | (MSGS1,msg M from O to O2) ] . 
+    ***initialize client, parameter: client number, replica number
+    op init-client : Nat Nat -> Node .
+    ***initialize replica, parameter: replica number, replica number
+    op init-replica : Nat Nat -> Node .
+    ***initialize configuration, parameter: replica number, client number
+    op init-config : Nat Nat -> Config .
+    op init : -> Config .
 
-  crl [discard-improper-msg]:
-    [ { C < O : Node |   (snd-buffer : ((msg M from O1 to O2) , MSGS)) , AS > } in time T | MSGS1 ] 
-        =>
-    [ { C < O : Node |   snd-buffer : MSGS , AS > } in time T | MSGS1 ] 
-    if O =/= O1 .
+    vars rn cn : Nat .
+    vars i : Nat .
 
-  rl [transfer-msg] :
-    [ { C < O : Node |   rcv-buffer : MSGS , AS > } in time T | (msg M from O2 to O),MSGS1 ] 
-        =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > } in time T | MSGS1 ] .
+    eq init-client(1, rn) = 
+    < rn : client | 
+        maxN: 5,
+        view: 0, 
+        rnum: rn, 
+        timestamp: 0,
+        curResult: < 0 , "" >, 
+        curRequest: none, 
+        replyLog: empty > .
 
-  rl [transfer-msg] :
-    [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
-        =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
+    ceq init-client(s i, rn) = 
+    init-client(i, rn)
+    < (rn + i) : client | 
+        maxN: 5,
+        view: 0, 
+        rnum: rn, 
+        timestamp: (100 * i),
+        curResult: < 0 , "" >, 
+        curRequest: none, 
+        replyLog: empty >
+    if i > 0 .
 
-  rl [transfer-msg] :
-    [ { C < O : Node |   rcv-buffer : MSGS , AS > }  | (msg M from O2 to O),MSGS1 ] 
-        =>
-    [ { C < O : Node |   rcv-buffer : (MSGS, msg M from O2 to O) , AS > }  | MSGS1 ] .
+    eq init-replica(1, rn) = 
+    < 0 : leader | 
+        view: 0,
+        seq: 0,
+        phase: none,
+        log: empty, 
+        rnum: rn,
+        state: "" > .
 
-  *** current disable the rules below
-  *** 网络可能会丢失消息，也有可能会错位发送消息，这里暂时先用nonexec屏蔽掉，之后可以用策略控制。
-  rl [discard-msg] :
-    [ CLS | MSG,MSGS1 ] =>  [ CLS | MSGS1 ] [nonexec]. *** discard the msg
-    
-  rl [exchange-msg]:
-    [ CLS | MSG,MSG1,MSGS1 ] => [ CLS | MSG1,MSG,MSGS1 ] [nonexec].
-    
+    ceq init-replica(s i, rn) = 
+    init-replica(i, rn)
+    < i : backup | 
+        view: 0,
+        phase: none,
+        log: empty, 
+        rnum: rn,
+        state: "" >
+    if i > 0 .
+
+    eq init-config(rn, cn) = init-replica(rn, rn) init-client(cn, rn) .
+
+    eq init = init-config(4, 2) .
 endm
 
-
-mod INIT-PBFT is
-    pr NETWORK .
-    vars N N1 N2 : Nat .
-    vars O O1 O2 : Oid . 
-    vars AS AS1 AS2 : AttributeSet .
-    vars CONF1 CONF2 : Configuration .
-    op init : -> Network .
-    op init-clock : Nat -> Object .
-    op init-nodes : Nat Nat -> Configuration .
-    op init-node : Nat Nat -> Object .
-    op isAllSame : Configuration -> Bool . ***determine whether all nodes have updated the values they save 判断所有的节点是否执行了操作
-    eq isAllSame(none) = true .
-    eq isAllSame(CONF1 < O : Clock | AS >) = isAllSame(CONF1) .
-    eq isAllSame(CONF1 < O : Node | current-num : N1 , AS > < O1 : Node | current-num : N2 , AS1 > ) = 
-           if N1 == N2 then isAllSame(CONF1 < O : Node | current-num : N1 , AS >)
-           else false fi .
-    eq isAllSame(< O : Node | AS >) = true .
-    eq isAllSame(CONF1 < O : Node | nodeType : CLIENT , AS >) = isAllSame(CONF1) .
-
-    *** init the primary , backups and a client .( N is the number of the backups , not the number of the Byzantine fault )
-    eq init-nodes(N,N1) = init-node(N,N) init-clients(N,N1) init-clock(s N + N1 ) . 
-    ceq init-node(s N , N1 ) =
-        < N : Node | rcv-buffer : empty , current-num : nil , states : empty , snd-buffer : empty , logs : nil , nodeType : BACKUP , view : 0 , r-num : N1 > init-node( N , N1 ) if N > 0 .
-    
-    eq init-node(1 , N) = < 0 : Node | rcv-buffer : empty , seq : random(N) , current-num : nil , logs : nil , snd-buffer : empty , nodeType : PRIMARY , view : 0 , states : empty , r-num : N > .
-    op init-clients : Nat Nat -> Object .
-    eq init-clients(N,s N1) = init-clients(s N , N1) init-client(N) .
-    eq init-clients(N,0) = none .
-    op init-client : Nat -> Object .
-    eq init-client(N) = 
-                     < N : Node | times : 5 ,rcv-buffer : empty , snd-buffer : empty , nodeType : CLIENT , r-num : N , view : 0 , state : request-start > .
-    eq init-clock(N) = 
-                     < N : Clock | time : 0 > .
-	eq init = [ {  init-nodes(4,2) } | empty ] .
-endm
-
-smod PBFT-ACTION is 
-  pr INIT-PBFT .
-  strat rcv-transfer-all : @ Network .
-  sd rcv-transfer-all :=  one( (rcv-msg ; transfer-msg )! )  .
-  strat main-strat : @ Network .
-  sd main-strat := one(snd-request !) ; rcv-transfer-all ;
-                   rcv-client-request !  ; rcv-transfer-all ; 
-                   one(rcv-pre-prepare !) ; rcv-transfer-all ; 
-                   one(primary-rcv-prepare-msg ! ) ; primary-into-commit ! ;   
-                   one(backup-rcv-prepare-msg !) ; one( backup-into-commit !) ; rcv-transfer-all ; 
-                   one(backup-rcv-commit-msg !) ; one(primary-rcv-commit-msg !) ; backup-respond-client-request ! ; 
-                   one(primary-respond-client-request !) ; rcv-transfer-all   .
-endsm
-
-
-set print attribute off .
-*** srew init using one(main-strat) .
+set print attribute on .
 frew init .
-set print attribute off .
